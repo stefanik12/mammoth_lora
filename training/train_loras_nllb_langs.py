@@ -95,10 +95,10 @@ def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_dat
                                       val_labels_or_path=os.path.join(lang_dir, "test.trg"),
                                       source_lang_id=src_lang,
                                       target_lang_id=tgt_lang,
-                                      batch_size=2,
+                                      batch_size=4,
                                       val_evaluators=evaluators,
                                       objective_id=tgt_lang,
-                                      max_samples_per_eval_log=9)
+                                      max_samples_per_eval_log=20)
     except FileNotFoundError as e:
         # test split does not exist
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
@@ -108,9 +108,9 @@ def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_dat
                                       labels_or_path=os.path.join(lang_dir, "train.trg.gz"),
                                       source_lang_id=src_lang,
                                       target_lang_id=tgt_lang,
-                                      batch_size=2,
+                                      batch_size=4,
                                       objective_id=tgt_lang,
-                                      max_samples_per_eval_log=9)
+                                      max_samples_per_eval_log=20)
     return objective
 
 
@@ -127,19 +127,20 @@ objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang i
 #     == id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "lora_A").default.weight)
 
 training_arguments = AdaptationArguments(output_dir="checkpoints",
-                                         learning_rate=2e-5,
+                                         learning_rate=4e-5,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
                                          stopping_patience=5,
                                          do_train=True,
                                          do_eval=True,
                                          warmup_steps=5000,
-                                         gradient_accumulation_steps=4,
+                                         gradient_accumulation_steps=8,
                                          logging_steps=7,
-                                         eval_steps=2,
+                                         eval_steps=500,
                                          save_steps=1000,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
-                                         no_cuda=True)
+                                         # no_cuda=True
+                                         )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
 
