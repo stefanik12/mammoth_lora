@@ -1,5 +1,6 @@
 import argparse
 import os
+from tqdm import tqdm
 
 from adaptor.adapter import Adapter
 from adaptor.evaluators.generative import BLEU
@@ -8,7 +9,7 @@ from adaptor.schedules import ParallelSchedule
 from adaptor.utils import AdaptationArguments, StoppingStrategy
 from peft import LoraConfig, TaskType
 
-from training.lora_lang_objective import LoraLangObjective
+from lora_lang_objective import LoraLangObjective
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_data_dir", help="A path containing bitexts in `{src-tgt}/train.src.gz`"
@@ -113,7 +114,8 @@ def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_dat
     return objective
 
 
-objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in target_langs]
+objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
+                                                                                       desc="Loading objectives...")]
 
 # lang-specific merge checks:
 # assert id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "sgn-LoraLangObjective_lora_A").default.weight) \
