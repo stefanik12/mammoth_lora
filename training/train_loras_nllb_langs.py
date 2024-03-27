@@ -1,3 +1,6 @@
+import argparse
+import os
+
 from adaptor.adapter import Adapter
 from adaptor.evaluators.generative import BLEU
 from adaptor.lang_module import LangModule
@@ -7,24 +10,51 @@ from peft import LoraConfig, TaskType
 
 from training.lora_lang_objective import LoraLangObjective
 
-lang_module = LangModule("google/flan-t5-small")
+parser = argparse.ArgumentParser()
+parser.add_argument("--base_data_dir", help="A path containing bitexts in `{src-tgt}/train.src.gz`"
+                                            "and `{src-tgt}/test.src` format.", required=True, type=str)
+parser.add_argument("--base_model", help="A pre-trained model to initialize "
+                                         "the training with", required=True, type=str)
+parser.add_argument("--reset_weights", help="Whether to reset the base model's weights",
+                    type=bool, default=False)
+parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
+                                           "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
+args = parser.parse_args()
+
+lang_module = LangModule(args.base_model)
+
+if args.reset_weights:
+    lang_module.reinit_base_model()
 
 evaluators = [BLEU(additional_sep_char="▁", decides_convergence=True)]
 
-nllb_langs = ['ace', 'ace', 'acm', 'acq', 'aeb', 'afr', 'ajp', 'aka', 'amh', 'apc', 'arb', 'ars', 'ary', 'arz', 'asm',
-              'ast', 'awa', 'ayr', 'azb', 'azj', 'bak', 'bam', 'ban', 'bem', 'ben', 'bho', 'bjn', 'bjn', 'bod', 'bos',
-              'bug', 'bul', 'cat', 'ceb', 'ces', 'cjk', 'ckb', 'crh', 'cym', 'dan', 'deu', 'dik', 'dyu', 'dzo', 'ell',
-              'eng', 'epo', 'est', 'eus', 'ewe', 'fao', 'pes', 'fij', 'fin', 'fon', 'fra', 'fur', 'fuv', 'gla', 'gle',
-              'glg', 'grn', 'guj', 'hat', 'hau', 'heb', 'hin', 'hne', 'hrv', 'hun', 'hye', 'ibo', 'ilo', 'ind', 'isl',
-              'ita', 'jav', 'jpn', 'kab', 'kac', 'kam', 'kan', 'kas', 'kas', 'kat', 'knc', 'knc', 'kaz', 'kbp', 'kea',
-              'khm', 'kik', 'kin', 'kir', 'kmb', 'kon', 'kor', 'kmr', 'lao', 'lvs', 'lij', 'lim', 'lin', 'lit', 'lmo',
-              'ltg', 'ltz', 'lua', 'lug', 'luo', 'lus', 'mag', 'mai', 'mal', 'mar', 'min', 'mkd', 'plt', 'mlt', 'mni',
-              'khk', 'mos', 'mri', 'zsm', 'mya', 'nld', 'nno', 'nob', 'npi', 'nso', 'nus', 'nya', 'oci', 'gaz', 'ory',
-              'pag', 'pan', 'pap', 'pol', 'por', 'prs', 'pbt', 'quy', 'ron', 'run', 'rus', 'sag', 'san', 'sat', 'scn',
-              'shn', 'sin', 'slk', 'slv', 'smo', 'sna', 'snd', 'som', 'sot', 'spa', 'als', 'srd', 'srp', 'ssw', 'sun',
-              'swe', 'swh', 'szl', 'tam', 'tat', 'tel', 'tgk', 'tgl', 'tha', 'tir', 'taq', 'taq', 'tpi', 'tsn', 'tso',
-              'tuk', 'tum', 'tur', 'twi', 'tzm', 'uig', 'ukr', 'umb', 'urd', 'uzn', 'vec', 'vie', 'war', 'wol', 'xho',
-              'ydd', 'yor', 'yue', 'zho', 'zho', 'zul']
+all_nllb_langs = ['ace', 'ace', 'acm', 'acq', 'aeb', 'afr', 'ajp', 'aka', 'amh', 'apc', 'arb', 'ars', 'ary', 'arz',
+                  'asm',
+                  'ast', 'awa', 'ayr', 'azb', 'azj', 'bak', 'bam', 'ban', 'bem', 'ben', 'bho', 'bjn', 'bjn', 'bod',
+                  'bos',
+                  'bug', 'bul', 'cat', 'ceb', 'ces', 'cjk', 'ckb', 'crh', 'cym', 'dan', 'deu', 'dik', 'dyu', 'dzo',
+                  'ell',
+                  'eng', 'epo', 'est', 'eus', 'ewe', 'fao', 'pes', 'fij', 'fin', 'fon', 'fra', 'fur', 'fuv', 'gla',
+                  'gle',
+                  'glg', 'grn', 'guj', 'hat', 'hau', 'heb', 'hin', 'hne', 'hrv', 'hun', 'hye', 'ibo', 'ilo', 'ind',
+                  'isl',
+                  'ita', 'jav', 'jpn', 'kab', 'kac', 'kam', 'kan', 'kas', 'kas', 'kat', 'knc', 'knc', 'kaz', 'kbp',
+                  'kea',
+                  'khm', 'kik', 'kin', 'kir', 'kmb', 'kon', 'kor', 'kmr', 'lao', 'lvs', 'lij', 'lim', 'lin', 'lit',
+                  'lmo',
+                  'ltg', 'ltz', 'lua', 'lug', 'luo', 'lus', 'mag', 'mai', 'mal', 'mar', 'min', 'mkd', 'plt', 'mlt',
+                  'mni',
+                  'khk', 'mos', 'mri', 'zsm', 'mya', 'nld', 'nno', 'nob', 'npi', 'nso', 'nus', 'nya', 'oci', 'gaz',
+                  'ory',
+                  'pag', 'pan', 'pap', 'pol', 'por', 'prs', 'pbt', 'quy', 'ron', 'run', 'rus', 'sag', 'san', 'sat',
+                  'scn',
+                  'shn', 'sin', 'slk', 'slv', 'smo', 'sna', 'snd', 'som', 'sot', 'spa', 'als', 'srd', 'srp', 'ssw',
+                  'sun',
+                  'swe', 'swh', 'szl', 'tam', 'tat', 'tel', 'tgk', 'tgl', 'tha', 'tir', 'taq', 'taq', 'tpi', 'tsn',
+                  'tso',
+                  'tuk', 'tum', 'tur', 'twi', 'tzm', 'uig', 'ukr', 'umb', 'urd', 'uzn', 'vec', 'vie', 'war', 'wol',
+                  'xho',
+                  'ydd', 'yor', 'yue', 'zho', 'zho', 'zul']
 
 nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
                            'fon', 'fra', 'fur', 'gla', 'gle', 'glg', 'grn', 'guj',
@@ -43,34 +73,38 @@ nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
                            'tzm', 'uig', 'ukr', 'umb', 'urd', 'vec', 'vie', 'war',
                            'wol', 'xho', 'yor', 'zho', 'zho', 'zul']
 
-nllb_eng_src_in_tatoeba = ['sgn', 'tah']
+if not args.target_langs:
+    target_langs = nllb_eng_src_in_tatoeba
+else:
+    target_langs = args.target_langs.split(",")
 
 peft_config = LoraConfig(
         task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1
 )
 
 
-def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_data_dir/%s-%s") -> LoraLangObjective:
+def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_data_dir") -> LoraLangObjective:
+    lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
     try:
         objective = LoraLangObjective(lang_module,
                                       peft_config=peft_config,
-                                      texts_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/train.src.gz",
-                                      labels_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/train.trg.gz",
-                                      val_texts_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/test.src",
-                                      val_labels_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/test.trg",
+                                      texts_or_path=os.path.join(lang_dir, "train.src.gz"),
+                                      labels_or_path=os.path.join(lang_dir, "train.trg.gz"),
+                                      val_texts_or_path=os.path.join(lang_dir, "test.src"),
+                                      val_labels_or_path=os.path.join(lang_dir, "test.trg"),
                                       source_lang_id=src_lang,
                                       target_lang_id=tgt_lang,
                                       batch_size=2,
                                       val_evaluators=evaluators,
                                       objective_id=tgt_lang,
                                       max_samples_per_eval_log=9)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         # test split does not exist
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
         objective = LoraLangObjective(lang_module,
                                       peft_config=peft_config,
-                                      texts_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/train.src.gz",
-                                      labels_or_path=(base_data_dir % (src_lang, tgt_lang)) + "/train.trg.gz",
+                                      texts_or_path=os.path.join(lang_dir, "train.src.gz"),
+                                      labels_or_path=os.path.join(lang_dir, "train.trg.gz"),
                                       source_lang_id=src_lang,
                                       target_lang_id=tgt_lang,
                                       batch_size=2,
@@ -79,7 +113,7 @@ def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_dat
     return objective
 
 
-objectives = [init_objective("eng", tgt_lang) for tgt_lang in nllb_eng_src_in_tatoeba]
+objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in target_langs]
 
 # lang-specific merge checks:
 # assert id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "sgn-LoraLangObjective_lora_A").default.weight) \
@@ -90,7 +124,7 @@ objectives = [init_objective("eng", tgt_lang) for tgt_lang in nllb_eng_src_in_ta
 # assert id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "sgn-LoraLangObjective_lora_A").default.weight) \
 #     == id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "lora_A").default.weight)
 
-training_arguments = AdaptationArguments(output_dir="experiments",
+training_arguments = AdaptationArguments(output_dir="checkpoints",
                                          learning_rate=2e-5,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
                                          stopping_patience=5,
