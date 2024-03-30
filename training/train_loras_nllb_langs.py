@@ -1,5 +1,8 @@
 import argparse
 import os
+
+from adaptor.objectives.objective_base import Objective
+from adaptor.objectives.seq2seq import Sequence2Sequence
 from tqdm import tqdm
 
 from adaptor.adapter import Adapter
@@ -8,6 +11,8 @@ from adaptor.lang_module import LangModule
 from adaptor.schedules import ParallelSchedule
 from adaptor.utils import AdaptationArguments, StoppingStrategy
 from peft import LoraConfig, TaskType
+
+LOCAL_RUN = True
 
 from lora_lang_objective import LoraLangObjective
 
@@ -20,7 +25,25 @@ parser.add_argument("--reset_weights", help="Whether to reset the base model's w
                     type=bool, default=False)
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
+parser.add_argument("--resume_training", help="Whether this is a continued training."
+                                              "Defaults to False", default=False, type=bool)
 args = parser.parse_args()
+args.resume_training = args.resume_training is not False
+
+if args.resume_training:
+    # remove the checkpoint-X part of path
+    checkpoint_dir = args.base_model.split("/checkpoint-")[0]
+else:
+    if LOCAL_RUN:
+        checkpoint_dir = "checkpoints"
+    else:
+        log_path = "checkpoints"
+
+        import wandb
+        wandb.init(project="gadgets")
+        checkpoint_dir = os.path.join(log_path, wandb.run.name)
+
+print("Checkpoint will be saved to '{}'".format(checkpoint_dir))
 
 lang_module = LangModule(args.base_model)
 
@@ -84,62 +107,61 @@ peft_config = LoraConfig(
 )
 
 
-def init_objective(src_lang: str, tgt_lang: str, base_data_dir="data/example_data_dir") -> LoraLangObjective:
+def init_objective(src_lang: str,
+                   tgt_lang: str,
+                   base_data_dir="data/example_data_dir",
+                   is_baseline: bool = False) -> Objective:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
+
+    shared_args = [lang_module]
+    shared_kwargs = {
+        "texts_or_path": os.path.join(lang_dir, "train.src.gz"),
+        "labels_or_path": os.path.join(lang_dir, "train.trg.gz"),
+        "val_texts_or_path": os.path.join(lang_dir, "test.src"),
+        "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
+        "source_lang_id": src_lang,
+        "target_lang_id": tgt_lang,
+        "batch_size": 2,
+        "val_evaluators": evaluators,
+        "objective_id": tgt_lang,
+        "max_samples_per_eval_log": 20,
+    }
+
     try:
-        objective = LoraLangObjective(lang_module,
-                                      peft_config=peft_config,
-                                      texts_or_path=os.path.join(lang_dir, "train.src.gz"),
-                                      labels_or_path=os.path.join(lang_dir, "train.trg.gz"),
-                                      val_texts_or_path=os.path.join(lang_dir, "test.src"),
-                                      val_labels_or_path=os.path.join(lang_dir, "test.trg"),
-                                      source_lang_id=src_lang,
-                                      target_lang_id=tgt_lang,
-                                      batch_size=4,
-                                      val_evaluators=evaluators,
-                                      objective_id=tgt_lang,
-                                      max_samples_per_eval_log=20)
+        if is_baseline:
+            objective = Sequence2Sequence(*shared_args, **shared_kwargs)
+        else:
+            objective = LoraLangObjective(*shared_args, peft_config=peft_config, **shared_kwargs)
     except FileNotFoundError as e:
         # test split does not exist
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
-        objective = LoraLangObjective(lang_module,
-                                      peft_config=peft_config,
-                                      texts_or_path=os.path.join(lang_dir, "train.src.gz"),
-                                      labels_or_path=os.path.join(lang_dir, "train.trg.gz"),
-                                      source_lang_id=src_lang,
-                                      target_lang_id=tgt_lang,
-                                      batch_size=4,
-                                      objective_id=tgt_lang,
-                                      max_samples_per_eval_log=20)
+        shared_kwargs = {k: v for k, v in shared_kwargs.items() if "val" not in k}
+        if is_baseline:
+            objective = Sequence2Sequence(*shared_args, **shared_kwargs)
+        else:
+            objective = LoraLangObjective(*shared_args, peft_config=peft_config, **shared_kwargs)
+
     return objective
 
 
 objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
                                                                                        desc="Loading objectives...")]
 
-# lang-specific merge checks:
-# assert id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "sgn-LoraLangObjective_lora_A").default.weight) \
-#     != id(getattr(list(lang_module.trainable_models.values())[1].base_model.encoder.block[1].layer[0].SelfAttention.q, "tah-LoraLangObjective_lora_A").default.weight)
-# assert id(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q.base_layer.weight) \
-#     == id(list(lang_module.trainable_models.values())[1].base_model.encoder.block[1].layer[0].SelfAttention.q.base_layer.weight)
-# In the case of objective-specific reference to lora modules:
-# assert id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "sgn-LoraLangObjective_lora_A").default.weight) \
-#     == id(getattr(list(lang_module.trainable_models.values())[0].base_model.encoder.block[1].layer[0].SelfAttention.q, "lora_A").default.weight)
-
-training_arguments = AdaptationArguments(output_dir="checkpoints",
+training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          learning_rate=4e-5,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
                                          stopping_patience=5,
                                          do_train=True,
                                          do_eval=True,
                                          warmup_steps=5000,
-                                         gradient_accumulation_steps=8,
+                                         gradient_accumulation_steps=2,
                                          logging_steps=7,
-                                         eval_steps=500,
-                                         save_steps=1000,
+                                         eval_steps=5,
+                                         save_steps=5,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
-                                         # no_cuda=True
+                                         no_cuda=True,
+                                         save_peft_base_model=True,
                                          )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
