@@ -1,7 +1,7 @@
 import copy
 import functools
 import logging
-from typing import Any, List, Union
+from typing import Any, List, Union, Dict
 
 import torch
 from adaptor.objectives.seq2seq import Sequence2Sequence
@@ -69,9 +69,10 @@ class LoraLangObjective(Sequence2Sequence):
     def register_compatible_head_model(self, *args, **kwargs) -> torch.nn.Module:
         # first, get the new module for this target lang: registration method will perform parameter merging,
         # but as it relies on shared modules names and PEFT renames the modules, we will need to re-run the merging
-        super().register_compatible_head_model(*args, **kwargs)
+        super(Sequence2Sequence, self).register_compatible_head_model(*args, **kwargs)
         lang_module = args[0]
         # then, extend it with PEFT modules
+        torch.manual_seed(42)
         lang_module.trainable_models[str(id(self))] = get_peft_model(lang_module.trainable_models[str(id(self))],
                                                                      self.peft_config)
         # rename PEFT components with lang_src-lang_tgt id, so that they are not merged within other modules
@@ -89,3 +90,73 @@ class LoraLangObjective(Sequence2Sequence):
         # reset PEFT disabling of some parameters' training
         self.mark_all_objective_params_as_trainable(lang_module.trainable_models[str(id(self))])
         return lang_module.trainable_models[str(id(self))]
+
+    def per_objective_log(self, split: str) -> Dict[str, float]:
+        """
+        Generates a log of this objective for a given split, using Evaluators of selected split.
+        :param split: Split of the log. Either `train` or `eval`.
+        :return: Dict of the format {split + objective_name + evaluator_name: evaluator_value}
+        """
+        out_logs = {}
+        if split == "eval" and self.val_texts is None and self.val_texts_path is None:
+            logger.warning("Skipping evaluation for %s" % self)
+            return out_logs
+        # aggregate per-progress_bar-steps, or per-evaluation-steps, keep the results of unprocessed evaluations
+        loss_history = self.loss_history[split][-self.max_samples_per_log[split]:]
+        mean_loss = sum(loss_history) / len(loss_history) if len(loss_history) else float("inf")
+        self.evaluations_history[split]["loss"].append(mean_loss)
+
+        out_logs["%s_%s_loss" % (split, self)] = mean_loss
+        out_logs["%s_%s_num_batches" % (split, self)] = len(loss_history)
+
+        for evaluator in self.evaluators[split]:
+            dataset = self.get_dataset(split, 0, self.compatible_head_model.device,
+                                       add_oid=False,
+                                       is_training_dataset=False)
+            # evaluator should already return an aggregated value, so unlike loss, we don't average it
+            try:
+                evaluator_value = evaluator(self.compatible_head_model, self.tokenizer, dataset)
+            except IndexError:
+                logger.error("Error decoding sources of %s in %s", evaluator, self)
+                evaluator_value = float('inf') if evaluator.smaller_is_better else 0
+            self.evaluations_history[split][evaluator].append(evaluator_value)
+            out_logs["%s_%s_%s" % (split, self, evaluator)] = evaluator_value
+
+        return out_logs
+
+
+class Sequence2SequenceBaseline(Sequence2Sequence):
+
+    def per_objective_log(self, split: str) -> Dict[str, float]:
+        """
+        Generates a log of this objective for a given split, using Evaluators of selected split.
+        :param split: Split of the log. Either `train` or `eval`.
+        :return: Dict of the format {split + objective_name + evaluator_name: evaluator_value}
+        """
+        out_logs = {}
+        if split == "eval" and self.val_texts is None and self.val_texts_path is None:
+            logger.warning("Skipping evaluation for %s" % self)
+            return out_logs
+        # aggregate per-progress_bar-steps, or per-evaluation-steps, keep the results of unprocessed evaluations
+        loss_history = self.loss_history[split][-self.max_samples_per_log[split]:]
+        mean_loss = sum(loss_history) / len(loss_history) if len(loss_history) else float("inf")
+        self.evaluations_history[split]["loss"].append(mean_loss)
+
+        out_logs["%s_%s_loss" % (split, self)] = mean_loss
+        out_logs["%s_%s_num_batches" % (split, self)] = len(loss_history)
+
+        for evaluator in self.evaluators[split]:
+            dataset = self.get_dataset(split, 0, self.compatible_head_model.device,
+                                       add_oid=False,
+                                       is_training_dataset=False)
+            # evaluator should already return an aggregated value, so unlike loss, we don't average it
+            try:
+                evaluator_value = evaluator(self.compatible_head_model, self.tokenizer, dataset)
+            except IndexError:
+                logger.error("Error decoding sources of %s in %s", evaluator, self)
+                evaluator_value = float('inf') if evaluator.smaller_is_better else 0
+            self.evaluations_history[split][evaluator].append(evaluator_value)
+            out_logs["%s_%s_%s" % (split, self, evaluator)] = evaluator_value
+
+        return out_logs
+
