@@ -11,9 +11,6 @@ from peft import LoraConfig, TaskType
 from tqdm import tqdm
 from lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
 
-LOCAL_RUN = True
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_data_dir", help="A path containing bitexts in `{src-tgt}/train.src.gz`"
                                             "and `{src-tgt}/test.src` format.", required=True, type=str)
@@ -24,21 +21,29 @@ parser.add_argument("--reset_weights", help="Whether to reset the base model's w
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
 parser.add_argument("--resume_training", help="Whether this is a continued training."
-                                              "Defaults to False", default=False, type=bool)
+                                              "Defaults to False", default="False", type=str)
 parser.add_argument("--baseline_training", help="Whether this is a training of the monolithic baseline."
-                                                "Defaults to False", default=False, type=bool)
+                                                "Defaults to False", default="False", type=str)
+parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
+                                                    "Defaults to True", default="True", type=str)
+parser.add_argument("--local_run", default="False", type=str)
+
 args = parser.parse_args()
-args.resume_training = args.resume_training is not False
-args.baseline_training = args.baseline_training is not False
+args.resume_training = args.resume_training.lower() != "false"
+args.baseline_training = args.baseline_training.lower() != "false"
+args.use_language_prefixes = args.use_language_prefixes.lower() != "false"
+args.local_run = args.local_run.lower() != "false"
+
+print("Running with arguments: %s" % args)
 
 if args.resume_training:
     # remove the checkpoint-X part of path
     checkpoint_dir = args.base_model.split("/checkpoint-")[0]
 else:
     checkpoint_dir = "checkpoints" if not args.baseline_training else "checkpoints-baseline"
-    if not LOCAL_RUN:
+    if not args.local_run and os.environ.get("LOCAL_RANK", 0) == 0:
         import wandb
-        wandb.init(project="gadgets")
+        wandb.init(project="mammoth-lora")
         checkpoint_dir = checkpoint_dir + "-" + wandb.run.name
 
 print("Checkpoint will be saved to '{}'".format(checkpoint_dir))
@@ -47,34 +52,6 @@ lang_module = LangModule(args.base_model)
 
 if args.reset_weights:
     lang_module.reinit_base_model()
-
-all_nllb_langs = ['ace', 'ace', 'acm', 'acq', 'aeb', 'afr', 'ajp', 'aka', 'amh', 'apc', 'arb', 'ars', 'ary', 'arz',
-                  'asm',
-                  'ast', 'awa', 'ayr', 'azb', 'azj', 'bak', 'bam', 'ban', 'bem', 'ben', 'bho', 'bjn', 'bjn', 'bod',
-                  'bos',
-                  'bug', 'bul', 'cat', 'ceb', 'ces', 'cjk', 'ckb', 'crh', 'cym', 'dan', 'deu', 'dik', 'dyu', 'dzo',
-                  'ell',
-                  'eng', 'epo', 'est', 'eus', 'ewe', 'fao', 'pes', 'fij', 'fin', 'fon', 'fra', 'fur', 'fuv', 'gla',
-                  'gle',
-                  'glg', 'grn', 'guj', 'hat', 'hau', 'heb', 'hin', 'hne', 'hrv', 'hun', 'hye', 'ibo', 'ilo', 'ind',
-                  'isl',
-                  'ita', 'jav', 'jpn', 'kab', 'kac', 'kam', 'kan', 'kas', 'kas', 'kat', 'knc', 'knc', 'kaz', 'kbp',
-                  'kea',
-                  'khm', 'kik', 'kin', 'kir', 'kmb', 'kon', 'kor', 'kmr', 'lao', 'lvs', 'lij', 'lim', 'lin', 'lit',
-                  'lmo',
-                  'ltg', 'ltz', 'lua', 'lug', 'luo', 'lus', 'mag', 'mai', 'mal', 'mar', 'min', 'mkd', 'plt', 'mlt',
-                  'mni',
-                  'khk', 'mos', 'mri', 'zsm', 'mya', 'nld', 'nno', 'nob', 'npi', 'nso', 'nus', 'nya', 'oci', 'gaz',
-                  'ory',
-                  'pag', 'pan', 'pap', 'pol', 'por', 'prs', 'pbt', 'quy', 'ron', 'run', 'rus', 'sag', 'san', 'sat',
-                  'scn',
-                  'shn', 'sin', 'slk', 'slv', 'smo', 'sna', 'snd', 'som', 'sot', 'spa', 'als', 'srd', 'srp', 'ssw',
-                  'sun',
-                  'swe', 'swh', 'szl', 'tam', 'tat', 'tel', 'tgk', 'tgl', 'tha', 'tir', 'taq', 'taq', 'tpi', 'tsn',
-                  'tso',
-                  'tuk', 'tum', 'tur', 'twi', 'tzm', 'uig', 'ukr', 'umb', 'urd', 'uzn', 'vec', 'vie', 'war', 'wol',
-                  'xho',
-                  'ydd', 'yor', 'yue', 'zho', 'zho', 'zul']
 
 nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
                            'fon', 'fra', 'fur', 'gla', 'gle', 'glg', 'grn', 'guj',
@@ -121,9 +98,15 @@ def init_objective(src_lang: str,
 
     # evaluation
     model_spec_generation_kwargs = {}
-    if hasattr(lang_module.tokenizer, "lang_code_to_id"):
-        model_bos_token_id = next(v for k, v in lang_module.tokenizer.lang_code_to_id.items() if tgt_lang in k)
-        model_spec_generation_kwargs = {"forced_bos_token_id": model_bos_token_id}
+    source_texts_prefix_fn = None
+    if args.use_language_prefixes:
+        if hasattr(lang_module.tokenizer, "lang_code_to_id"):
+            model_bos_token_id = next(v for k, v in lang_module.tokenizer.lang_code_to_id.items() if tgt_lang in k)
+            model_spec_generation_kwargs = {"forced_bos_token_id": model_bos_token_id}
+        else:
+            # prefix source texts with prompt
+            source_texts_prefix_fn = lambda src_text, lang: "Translate to %s: %s" % (lang, src_text)
+
     general_kwargs = {"max_length": 128}
 
     evaluators = [CustomBLEU(decides_convergence=True,
@@ -137,9 +120,10 @@ def init_objective(src_lang: str,
         "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
         "source_lang_id": src_lang,
         "target_lang_id": tgt_lang,
-        "batch_size": 1,
+        "batch_size": 2,
         "val_evaluators": evaluators,
         "objective_id": tgt_lang,
+        "source_texts_prefix_fn": source_texts_prefix_fn,
         "max_samples_per_eval_log": 20,
     }
 
@@ -165,23 +149,24 @@ objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang i
 saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
-                                         learning_rate=4e-5,
+                                         learning_rate=2e-5,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
                                          saving_strategy=saving_strategy,
                                          stopping_patience=5,
                                          do_train=True,
                                          do_eval=True,
                                          warmup_steps=5000,
-                                         gradient_accumulation_steps=8,
-                                         logging_steps=7,
-                                         eval_steps=500,
+                                         gradient_accumulation_steps=len(target_langs),
+                                         logging_steps=50,
+                                         eval_steps=1000,
                                          save_steps=1000,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
-                                         no_cuda=True,
+                                         # no_cuda=True,
                                          save_peft_base_model=True,
                                          local_rank=os.environ.get("LOCAL_RANK", 0),
-                                         save_total_limit=3,
+                                         save_total_limit=6,
+                                         bf16=True,
                                          )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
