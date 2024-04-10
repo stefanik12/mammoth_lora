@@ -7,6 +7,7 @@ import torch
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from peft import PeftConfig, get_peft_model
 from peft.peft_model import PEFT_TYPE_TO_MODEL_MAPPING
+from transformers import DataCollatorForSeq2Seq
 
 logger = logging.getLogger()
 
@@ -16,6 +17,9 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
     def __init__(self, *args, source_texts_prefix_fn: Optional[Callable[[str, str], str]] = None, **kwargs):
         self.source_texts_prefix_fn = source_texts_prefix_fn
         super().__init__(*args, **kwargs)
+
+        self.collator = DataCollatorForSeq2Seq(self.tokenizer, self.compatible_head_model,
+                                               pad_to_multiple_of=8, max_length=256)
 
     def per_objective_log(self, split: str) -> Dict[str, float]:
         """
