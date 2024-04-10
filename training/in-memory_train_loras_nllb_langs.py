@@ -42,7 +42,9 @@ if args.resume_training:
     # remove the checkpoint-X part of path
     checkpoint_dir = args.base_model.split("/checkpoint-")[0]
 else:
-    checkpoint_dir = "checkpoints" if not args.baseline_training else "checkpoints-baseline"
+    checkpoint_dir = "/scratch/project_462000447/members/mstefani/"
+    checkpoint_dir += "checkpoints" if not args.baseline_training else "checkpoints-baseline"
+    checkpoint_dir += "-all_langs" if not args.target_langs else "-%s_langs" % len(args.target_langs.split(","))
     if not args.local_run and os.environ.get("LOCAL_RANK", 0) == 0:
         import wandb
         wandb.init(project="mammoth-lora")
@@ -88,7 +90,7 @@ peft_config = LoraConfig(
 def texts_from_path(path: str):
     texts_iter = AdaptationDataset.iter_text_file_per_line(path)
     firstn_texts = itertools.islice(texts_iter, args.firstn)
-    return [t for t in firstn_texts]
+    return [t for t in tqdm(firstn_texts, desc="Loading texts from %s" % path)]
 
 
 class CustomBLEU(BLEU):
