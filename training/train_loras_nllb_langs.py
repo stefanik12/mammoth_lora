@@ -1,25 +1,34 @@
 import argparse
+import itertools
 import os
 
+import torch
 from adaptor.adapter import Adapter
-from adaptor.evaluators.generative import BLEU
 from adaptor.lang_module import LangModule
-from adaptor.objectives.objective_base import Objective
+from adaptor.objectives.seq2seq import Sequence2Sequence
 from adaptor.schedules import ParallelSchedule
 from adaptor.utils import AdaptationArguments, StoppingStrategy, SavingStrategy
 from peft import LoraConfig, TaskType
 from tqdm import tqdm
+
 from lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
+from training.evaluators import GradientsDotProduct, CustomBLEU
+
+torch.multiprocessing.set_start_method('spawn')
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_data_dir", help="A path containing bitexts in `{src-tgt}/train.src.gz`"
                                             "and `{src-tgt}/test.src` format.", required=True, type=str)
 parser.add_argument("--base_model", help="A pre-trained model to initialize "
                                          "the training with", required=True, type=str)
+parser.add_argument("--base_model_type", help="A type of the model to decide on LoRA adapters mapping. ",
+                    default=None, type=str)
 parser.add_argument("--reset_weights", help="Whether to reset the base model's weights",
                     type=bool, default=False)
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
+parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
+                                                    "(GradientDotProduct eval). Format: 'fur,tah;epo,est'", default="")
 parser.add_argument("--resume_training", help="Whether this is a continued training."
                                               "Defaults to False", default="False", type=str)
 parser.add_argument("--baseline_training", help="Whether this is a training of the monolithic baseline."
@@ -43,6 +52,7 @@ else:
     checkpoint_dir = "checkpoints" if not args.baseline_training else "checkpoints-baseline"
     if not args.local_run and os.environ.get("LOCAL_RANK", 0) == 0:
         import wandb
+
         wandb.init(project="mammoth-lora")
         checkpoint_dir = checkpoint_dir + "-" + wandb.run.name
 
@@ -75,25 +85,19 @@ if not args.target_langs:
 else:
     target_langs = args.target_langs.split(",")
 
+model_type = args.base_model_type if args.base_model_type else args.base_model
+print("Model type: %s" % model_type)
 per_model_target_modules = {"facebook/nllb-200-distilled-600M": ["q_proj", "v_proj"]}
 
 peft_config = LoraConfig(
         task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1,
-        target_modules=per_model_target_modules.get(lang_module.model_name_or_path, None)  # default for other models
+        target_modules=per_model_target_modules.get(model_type, None)  # default for other models
 )
-
-
-class CustomBLEU(BLEU):
-
-    def evaluate_str(self, expected_list, actual_list) -> float:
-        expected_nonempty = [e for e, a in zip(expected_list, actual_list) if e and a]
-        actual_nonempty = [a for e, a in zip(expected_list, actual_list) if e and a]
-        return super().evaluate_str(expected_nonempty, actual_nonempty)
 
 
 def init_objective(src_lang: str,
                    tgt_lang: str,
-                   base_data_dir="data/example_data_dir") -> Objective:
+                   base_data_dir="data/example_data_dir") -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
     # evaluation
@@ -120,7 +124,7 @@ def init_objective(src_lang: str,
         "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
         "source_lang_id": src_lang,
         "target_lang_id": tgt_lang,
-        "batch_size": 2,
+        "batch_size": 1,
         "val_evaluators": evaluators,
         "objective_id": tgt_lang,
         "source_texts_prefix_fn": source_texts_prefix_fn,
@@ -146,6 +150,19 @@ def init_objective(src_lang: str,
 
 objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
                                                                                        desc="Loading objectives...")]
+if args.pair_evaluation_langs:
+    eval_compared_lang_pairs = [pair.split(",") for pair in args.pair_evaluation_langs.split(";")]
+
+    eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.permutations(objectives, 2)
+                            if (ref_o.target_lang_id, comp_o.target_lang_id) in eval_compared_lang_pairs]
+    print("Performing comparative evaluation on the following language pairs: %s"
+          % [(ref_o.target_lang_id, comp_o.target_lang_id) for ref_o, comp_o in eval_objective_pairs])
+
+    pair_evaluators = [GradientsDotProduct(*pair) for pair in eval_objective_pairs]
+
+    objectives[0].evaluators["eval"] += pair_evaluators
+
+
 saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
@@ -158,15 +175,15 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          warmup_steps=5000,
                                          gradient_accumulation_steps=len(target_langs),
                                          logging_steps=50,
-                                         eval_steps=1000,
+                                         eval_steps=500,
                                          save_steps=1000,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
-                                         # no_cuda=True,
+                                         no_cuda=True if args.local_run else False,
                                          save_peft_base_model=True,
                                          local_rank=os.environ.get("LOCAL_RANK", 0),
                                          save_total_limit=6,
-                                         bf16=True,
+                                         # bf16=True,  # TODO: set for lumi
                                          )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)

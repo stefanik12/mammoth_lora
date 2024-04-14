@@ -49,7 +49,11 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
             except IndexError:
                 logger.error("Error decoding sources of %s in %s", evaluator, self)
                 evaluator_value = float('inf') if evaluator.smaller_is_better else 0
-            self.evaluations_history[split][evaluator].append(evaluator_value)
+            try:
+                self.evaluations_history[split][evaluator].append(evaluator_value)
+            except KeyError:
+                self.evaluations_history[split][evaluator] = [evaluator_value]
+
             out_logs["%s_%s_%s" % (split, self, evaluator)] = evaluator_value
 
         return out_logs
