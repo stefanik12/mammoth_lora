@@ -82,7 +82,7 @@ class LangGradients(ContrastiveEvaluator):
         out_dict = {}
         if self.grouping == "per-layer":
 
-            groups = [re.findall(r"(?:encoder|decoder).block.[0-9]+", param_name) for param_name in own_gradients.keys()]
+            groups = [re.findall(r"(?:encoder|decoder).(?:layers|block).[0-9]+", param_name) for param_name in own_gradients.keys()]
             for layer_group in sorted(dict.fromkeys(itertools.chain(*groups))):  # consistently sorted for logging
                 group_params = [p for p in shared_params if layer_group in p]
                 group_cos = [torch.cosine_similarity(own_gradients[p].flatten(), other_gradients[p].flatten(), dim=0)
@@ -91,7 +91,7 @@ class LangGradients(ContrastiveEvaluator):
                 group_dot_products = [own_gradients[p].flatten().dot(other_gradients[p].flatten()) / own_gradients[p].numel()
                                       for p in group_params]
                 group_dot_product_avg = torch.mean(torch.stack(group_dot_products))
-                layer_idx = layer_group.replace("block.", "layer.")
+                layer_idx = layer_group.replace("block.", "layers.")
                 out_dict["%s-%s-%s" % (str(self), "cos_sim", layer_idx)] = group_cos_avg.item()
                 out_dict["%s-%s-%s" % (str(self), "dot_prod", layer_idx)] = group_dot_product_avg.item()
         else:
