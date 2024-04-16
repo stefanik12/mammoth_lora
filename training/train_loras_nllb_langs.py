@@ -31,8 +31,9 @@ parser.add_argument("--target_langs", help="Coma-separated list of target langua
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
                                                     "(GradientDotProduct eval). Format: 'fur,tah;epo,est'", default="")
-parser.add_argument("--resume_training", help="Whether this is a continued training."
-                                              "Defaults to False", default="False", type=str)
+parser.add_argument("--eval_batches", default=20, type=int)
+parser.add_argument("--resume_from_checkpoint", help="Whether this is a continued training."
+                                                     "Defaults to False", default="False", type=str)
 parser.add_argument("--baseline_training", help="Whether this is a training of the monolithic baseline."
                                                 "Defaults to False", default="False", type=str)
 parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
@@ -41,7 +42,7 @@ parser.add_argument("--local_run", default="False", type=str)
 parser.add_argument("--eval_run", default="False", type=str)
 
 args = parser.parse_args()
-args.resume_training = args.resume_training.lower() != "false"
+args.resume_from_checkpoint = args.resume_from_checkpoint.lower() != "false"
 args.baseline_training = args.baseline_training.lower() != "false"
 args.use_language_prefixes = args.use_language_prefixes.lower() != "false"
 args.local_run = args.local_run.lower() != "false"
@@ -49,7 +50,7 @@ args.eval_run = args.eval_run.lower() != "false"
 
 print("Running with arguments: %s" % args)
 
-if args.resume_training:
+if args.resume_from_checkpoint:
     # remove the checkpoint-X part of path
     checkpoint_dir = args.base_model.split("/checkpoint-")[0]
 else:
@@ -138,7 +139,7 @@ def init_objective(src_lang: str,
         "val_evaluators": evaluators,
         "objective_id": tgt_lang,
         "source_texts_prefix_fn": source_texts_prefix_fn,
-        "max_samples_per_eval_log": 20,
+        "max_samples_per_eval_log": args.eval_batches,
     }
 
     try:
@@ -171,7 +172,6 @@ if args.pair_evaluation_langs:
     pair_evaluators = [LangGradients(*pair) for pair in eval_objective_pairs]
 
     objectives[0].evaluators["eval"] += pair_evaluators
-
 
 saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
 
