@@ -73,7 +73,7 @@ nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
                            'fon', 'fra', 'fur', 'gla', 'gle', 'glg', 'grn', 'guj',
                            'hat', 'hau', 'heb', 'hin', 'hne', 'hun', 'hye', 'ibo',
                            'ilo', 'isl', 'ita', 'jav', 'jpn', 'kab', 'kac', 'kam',
-                           'kan', 'kas', 'kas', 'kat', 'kaz', 'kbp', 'kea', 'khm',
+                           'kan', 'kas', 'kat', 'kaz', 'kbp', 'kea', 'khm',
                            'kik', 'kin', 'kir', 'kmb', 'kon', 'kor', 'lao', 'lij',
                            'lim', 'lin', 'lit', 'lmo', 'ltz', 'lua', 'lug', 'luo',
                            'lus', 'mag', 'mai', 'mal', 'mar', 'mkd', 'mlt', 'mni',
@@ -84,7 +84,7 @@ nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
                            'sun', 'swe', 'szl', 'tam', 'tat', 'tel', 'tgk', 'tgl',
                            'tha', 'tir', 'tpi', 'tsn', 'tso', 'tuk', 'tum', 'tur',
                            'tzm', 'uig', 'ukr', 'umb', 'urd', 'vec', 'vie', 'war',
-                           'wol', 'xho', 'yor', 'zho', 'zho', 'zul']
+                           'wol', 'xho', 'yor', 'zho', 'zul']
 
 if not args.target_langs:
     target_langs = nllb_eng_src_in_tatoeba
