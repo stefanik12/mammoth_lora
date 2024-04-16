@@ -34,7 +34,7 @@ class ContrastiveEvaluator(EvaluatorBase, abc.ABC):
         self.other_objective = other_objective
 
 
-class GradientsDotProduct(ContrastiveEvaluator):
+class LangGradients(ContrastiveEvaluator):
 
     def __init__(self, *args, grouping: str = "per-layer", **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,9 +49,11 @@ class GradientsDotProduct(ContrastiveEvaluator):
         agg_grads = None
         norm = 2  # normalization in the running average
         for batch in encoded_dataset:
-            outputs = model(**{k: v for k, v in batch.items() if k != "labels"})  # drop labels to avoid computing loss
-            loss = objective.compute_loss(outputs.logits, batch["labels"], batch["input_ids"], "eval")
-            loss.backward()  # computes and retains grads for all params
+            outputs = model(**batch)  # forward also takes care of model-specific shifting decoder_input_ids
+
+            # Optimisation: for custom objectives, make sure to compute loss with objective.compute_loss():
+            # loss = objective.compute_loss(outputs.logits, batch["labels"], batch["input_ids"], "eval")
+            outputs.loss.backward()  # computes and retains grads for all params
             if agg_grads is None:
                 agg_grads = {name: model.get_parameter(name).grad for name in param_names}
             else:
@@ -66,7 +68,7 @@ class GradientsDotProduct(ContrastiveEvaluator):
     def __call__(self,
                  model: torch.nn.Module,
                  tokenizer: PreTrainedTokenizer,
-                 dataset: AdaptationDataset) -> Union[float, Dict[str, float]]:
+                 dataset: AdaptationDataset) -> Dict[str, float]:
         own_lang_params = set(n for n, p in self.ref_objective.compatible_head_model.named_parameters())
         other_lang_params = set(n for n, p in self.other_objective.compatible_head_model.named_parameters())
         shared_params = own_lang_params & other_lang_params
@@ -77,21 +79,29 @@ class GradientsDotProduct(ContrastiveEvaluator):
         other_gradients = self._gradients_for_objective(self.other_objective, shared_params)
 
         # 3. compare this objective's dataset with the behaviour of other datasets
+        out_dict = {}
         if self.grouping == "per-layer":
-            out_dict = {}
-            groups = [re.findall(r"block.[0-9]+", param_name) for param_name in own_gradients.keys()]
+
+            groups = [re.findall(r"(?:encoder|decoder).block.[0-9]+", param_name) for param_name in own_gradients.keys()]
             for layer_group in sorted(dict.fromkeys(itertools.chain(*groups))):  # consistently sorted for logging
                 group_params = [p for p in shared_params if layer_group in p]
+                group_cos = [torch.cosine_similarity(own_gradients[p].flatten(), other_gradients[p].flatten(), dim=0)
+                             for p in group_params]
+                group_cos_avg = torch.mean(torch.stack(group_cos))
                 group_dot_products = [own_gradients[p].flatten().dot(other_gradients[p].flatten()) / own_gradients[p].numel()
                                       for p in group_params]
                 group_dot_product_avg = torch.mean(torch.stack(group_dot_products))
-                key = str(self) + "-" + layer_group.replace("block.", "layer.")
-                out_dict[key] = group_dot_product_avg.item()
-            return out_dict
+                layer_idx = layer_group.replace("block.", "layer.")
+                out_dict["%s-%s-%s" % (str(self), "cos_sim", layer_idx)] = group_cos_avg.item()
+                out_dict["%s-%s-%s" % (str(self), "dot_prod", layer_idx)] = group_dot_product_avg.item()
         else:
+            all_cos = [torch.cosine_similarity(own_gradients[p].flatten(), other_gradients[p].flatten(), dim=0)
+                       for p in own_gradients.keys()]
             all_dot_products = [own_gradients[p].flatten().dot(other_gradients[p].flatten()) / own_gradients[p].numel()
                                 for p in own_gradients.keys()]
-            return torch.mean(torch.stack(all_dot_products)).item()
+            out_dict["%s-%s" % (str(self), "cos_sim")] = torch.mean(torch.stack(all_cos)).item()
+            out_dict["%s-%s" % (str(self), "dot_prod")] = torch.mean(torch.stack(all_dot_products)).item()
+        return out_dict
 
     def __str__(self):
         return super().__str__() + "_%s-%s" % (self.ref_objective.target_lang_id, self.other_objective.target_lang_id)

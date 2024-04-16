@@ -11,8 +11,8 @@ from adaptor.utils import AdaptationArguments, StoppingStrategy, SavingStrategy
 from peft import LoraConfig, TaskType
 from tqdm import tqdm
 
-from lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
-from training.evaluators import GradientsDotProduct, CustomBLEU
+from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
+from training.evaluators import LangGradients, CustomBLEU
 
 torch.multiprocessing.set_start_method('spawn')
 
@@ -21,6 +21,8 @@ parser.add_argument("--base_data_dir", help="A path containing bitexts in `{src-
                                             "and `{src-tgt}/test.src` format.", required=True, type=str)
 parser.add_argument("--base_model", help="A pre-trained model to initialize "
                                          "the training with", required=True, type=str)
+parser.add_argument("--checkpoint_dir", help="A base folder where to store the training checkpoints."
+                                             "Ignored in continued training.", type=str, default=".")
 parser.add_argument("--base_model_type", help="A type of the model to decide on LoRA adapters mapping. ",
                     default=None, type=str)
 parser.add_argument("--reset_weights", help="Whether to reset the base model's weights",
@@ -36,12 +38,14 @@ parser.add_argument("--baseline_training", help="Whether this is a training of t
 parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
                                                     "Defaults to True", default="True", type=str)
 parser.add_argument("--local_run", default="False", type=str)
+parser.add_argument("--eval_run", default="False", type=str)
 
 args = parser.parse_args()
 args.resume_training = args.resume_training.lower() != "false"
 args.baseline_training = args.baseline_training.lower() != "false"
 args.use_language_prefixes = args.use_language_prefixes.lower() != "false"
 args.local_run = args.local_run.lower() != "false"
+args.eval_run = args.eval_run.lower() != "false"
 
 print("Running with arguments: %s" % args)
 
@@ -49,7 +53,8 @@ if args.resume_training:
     # remove the checkpoint-X part of path
     checkpoint_dir = args.base_model.split("/checkpoint-")[0]
 else:
-    checkpoint_dir = "checkpoints" if not args.baseline_training else "checkpoints-baseline"
+    checkpoint_dir = os.path.join(args.checkpoint_dir, ("checkpoints" if not args.baseline_training
+                                                        else "checkpoints-baseline"))
     if not args.local_run and os.environ.get("LOCAL_RANK", 0) == 0:
         import wandb
 
@@ -103,10 +108,15 @@ def init_objective(src_lang: str,
     # evaluation
     model_spec_generation_kwargs = {}
     source_texts_prefix_fn = None
+    specific_src_lang = None
+    specific_tgt_lang = None
     if args.use_language_prefixes:
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
-            model_bos_token_id = next(v for k, v in lang_module.tokenizer.lang_code_to_id.items() if tgt_lang in k)
-            model_spec_generation_kwargs = {"forced_bos_token_id": model_bos_token_id}
+            specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
+                                                   if tgt_lang in k)
+            specific_tgt_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(tgt_lang))
+            model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
+            specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(src_lang))
         else:
             # prefix source texts with prompt
             source_texts_prefix_fn = lambda src_text, lang: "Translate to %s: %s" % (lang, src_text)
@@ -118,12 +128,12 @@ def init_objective(src_lang: str,
 
     shared_args = [lang_module]
     shared_kwargs = {
-        "texts_or_path": os.path.join(lang_dir, "train.src.gz"),
-        "labels_or_path": os.path.join(lang_dir, "train.trg.gz"),
+        "texts_or_path": os.path.join(lang_dir, "train.src.gz") if not args.eval_run else [],
+        "labels_or_path": os.path.join(lang_dir, "train.trg.gz") if not args.eval_run else [],
         "val_texts_or_path": os.path.join(lang_dir, "test.src"),
         "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
-        "source_lang_id": src_lang,
-        "target_lang_id": tgt_lang,
+        "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
+        "target_lang_id": specific_tgt_lang if specific_tgt_lang is not None else tgt_lang,
         "batch_size": 1,
         "val_evaluators": evaluators,
         "objective_id": tgt_lang,
@@ -151,14 +161,14 @@ def init_objective(src_lang: str,
 objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
                                                                                        desc="Loading objectives...")]
 if args.pair_evaluation_langs:
-    eval_compared_lang_pairs = [pair.split(",") for pair in args.pair_evaluation_langs.split(";")]
+    eval_compared_lang_pairs = [tuple(pair.split(",")) for pair in args.pair_evaluation_langs.split(";")]
 
-    eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.permutations(objectives, 2)
-                            if (ref_o.target_lang_id, comp_o.target_lang_id) in eval_compared_lang_pairs]
+    eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.product(objectives, repeat=2)
+                            if (ref_o.given_id, comp_o.given_id) in eval_compared_lang_pairs]
     print("Performing comparative evaluation on the following language pairs: %s"
           % [(ref_o.target_lang_id, comp_o.target_lang_id) for ref_o, comp_o in eval_objective_pairs])
 
-    pair_evaluators = [GradientsDotProduct(*pair) for pair in eval_objective_pairs]
+    pair_evaluators = [LangGradients(*pair) for pair in eval_objective_pairs]
 
     objectives[0].evaluators["eval"] += pair_evaluators
 
@@ -183,11 +193,14 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          save_peft_base_model=True,
                                          local_rank=os.environ.get("LOCAL_RANK", 0),
                                          save_total_limit=6,
-                                         # bf16=True,  # TODO: set for lumi
+                                         bf16=True,  # TODO: comment for lumi
                                          )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
-adapter.train()
+if not args.eval_run:
+    adapter.train()
+else:
+    adapter.evaluate()
