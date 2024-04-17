@@ -68,11 +68,17 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
 
 class LoraLangObjective(Sequence2SequenceBaseline):
 
-    def __init__(self, *args, peft_config: PeftConfig, **kwargs):
+    def __init__(self, *args, peft_config: PeftConfig, freeze_shared_params: bool = False, **kwargs):
         self.peft_config = peft_config
-        super().__init__(*args, **kwargs)
+        self.freeze_shared_params = freeze_shared_params
+        assert "peft_objective" not in kwargs, "LoraLangObjective is enforced to be loaded as peft_objective=True."
+        assert "objective_args_for_head_config" not in kwargs
 
-    def mark_all_objective_params_as_trainable(self, model: torch.nn.Module) -> None:
+        super().__init__(*args, objective_args_for_head_config={"peft_config": peft_config},
+                         peft_objective=True, **kwargs)
+
+    @staticmethod
+    def mark_all_objective_params_as_trainable(model: torch.nn.Module) -> None:
         for n, p in model.named_parameters():
             p.requires_grad = True
 
@@ -122,14 +128,9 @@ class LoraLangObjective(Sequence2SequenceBaseline):
             del iter_submodule
 
     def register_compatible_head_model(self, *args, **kwargs) -> torch.nn.Module:
-        # first, get the new module for this target lang: registration method will perform parameter merging,
-        # but as it relies on shared modules names and PEFT renames the modules, we will need to re-run the merging
+        # first, get the new module for this target lang: registration method will perform parameter merging
         super(Sequence2Sequence, self).register_compatible_head_model(*args, **kwargs)
         lang_module = args[0]
-        # then, extend it with PEFT modules
-        torch.manual_seed(42)
-        lang_module.trainable_models[str(id(self))] = get_peft_model(lang_module.trainable_models[str(id(self))],
-                                                                     self.peft_config)
         # rename PEFT components with lang_src-lang_tgt id, so that they are not merged within other modules
         peft_modules_prefix = PEFT_TYPE_TO_MODEL_MAPPING[self.peft_config.peft_type].prefix
         self.rename_peft_modules2(lang_module.trainable_models[str(id(self))], None,
@@ -140,8 +141,10 @@ class LoraLangObjective(Sequence2SequenceBaseline):
             unmatched_modules = lang_module._partially_merge_models(list(lang_module.trainable_models.values())[0],
                                                                     lang_module.trainable_models[str(id(self))],
                                                                     no_merge_keys_containing=peft_modules_prefix)
+            # TODO: find out if the second merging run has any sense
             logger.warning("These layers of %s objective are not merged: %s" % (self.target_lang_id, unmatched_modules))
 
-        # reset PEFT disabling of some parameters' training
-        self.mark_all_objective_params_as_trainable(lang_module.trainable_models[str(id(self))])
+        if not self.freeze_shared_params:
+            # enable back training of the original model's parameters, disabled by PEFT
+            self.mark_all_objective_params_as_trainable(lang_module.trainable_models[str(id(self))])
         return lang_module.trainable_models[str(id(self))]

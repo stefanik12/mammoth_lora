@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
 from training.evaluators import LangGradients, CustomBLEU
+from training.langs import nllb_eng_src_in_tatoeba
 
 torch.multiprocessing.set_start_method('spawn')
 
@@ -36,6 +37,8 @@ parser.add_argument("--resume_from_checkpoint", help="Whether this is a continue
                                                      "Defaults to False", default="False", type=str)
 parser.add_argument("--baseline_training", help="Whether this is a training of the monolithic baseline."
                                                 "Defaults to False", default="False", type=str)
+parser.add_argument("--freeze_shared_params", help="Whether to avoid training of the modules' "
+                                                   "shared parameters. Defaults to False", default="False", type=str)
 parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
                                                     "Defaults to True", default="True", type=str)
 parser.add_argument("--local_run", default="False", type=str)
@@ -47,6 +50,7 @@ args.baseline_training = args.baseline_training.lower() != "false"
 args.use_language_prefixes = args.use_language_prefixes.lower() != "false"
 args.local_run = args.local_run.lower() != "false"
 args.eval_run = args.eval_run.lower() != "false"
+args.freeze_shared_params = args.freeze_shared_params.lower() != "false"
 
 print("Running with arguments: %s" % args)
 
@@ -68,23 +72,6 @@ lang_module = LangModule(args.base_model)
 
 if args.reset_weights:
     lang_module.reinit_base_model()
-
-nllb_eng_src_in_tatoeba = ['epo', 'est', 'eus', 'ewe', 'fao', 'fij', 'fin',
-                           'fon', 'fra', 'fur', 'gla', 'gle', 'glg', 'grn', 'guj',
-                           'hat', 'hau', 'heb', 'hin', 'hne', 'hun', 'hye', 'ibo',
-                           'ilo', 'isl', 'ita', 'jav', 'jpn', 'kab', 'kac', 'kam',
-                           'kan', 'kas', 'kat', 'kaz', 'kbp', 'kea', 'khm',
-                           'kik', 'kin', 'kir', 'kmb', 'kon', 'kor', 'lao', 'lij',
-                           'lim', 'lin', 'lit', 'lmo', 'ltz', 'lua', 'lug', 'luo',
-                           'lus', 'mag', 'mai', 'mal', 'mar', 'mkd', 'mlt', 'mni',
-                           'mos', 'mri', 'mya', 'nld', 'nso', 'nus', 'nya', 'oci',
-                           'pag', 'pan', 'pap', 'pol', 'por', 'ron', 'run', 'rus',
-                           'sag', 'san', 'sat', 'scn', 'shn', 'sin', 'slk', 'slv',
-                           'smo', 'sna', 'snd', 'som', 'sot', 'spa', 'srd', 'ssw',
-                           'sun', 'swe', 'szl', 'tam', 'tat', 'tel', 'tgk', 'tgl',
-                           'tha', 'tir', 'tpi', 'tsn', 'tso', 'tuk', 'tum', 'tur',
-                           'tzm', 'uig', 'ukr', 'umb', 'urd', 'vec', 'vie', 'war',
-                           'wol', 'xho', 'yor', 'zho', 'zul']
 
 if not args.target_langs:
     target_langs = nllb_eng_src_in_tatoeba
@@ -146,7 +133,8 @@ def init_objective(src_lang: str,
         if args.baseline_training:
             objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
         else:
-            objective = LoraLangObjective(*shared_args, peft_config=peft_config, **shared_kwargs)
+            objective = LoraLangObjective(*shared_args, peft_config=peft_config,
+                                          freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
     except FileNotFoundError as e:
         # test split does not exist
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
@@ -154,7 +142,8 @@ def init_objective(src_lang: str,
         if args.baseline_training:
             objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
         else:
-            objective = LoraLangObjective(*shared_args, peft_config=peft_config, **shared_kwargs)
+            objective = LoraLangObjective(*shared_args, peft_config=peft_config,
+                                          freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
 
     return objective
 
@@ -186,7 +175,7 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          gradient_accumulation_steps=len(target_langs),
                                          logging_steps=50,
                                          eval_steps=500,
-                                         save_steps=1000,
+                                         save_steps=4,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
                                          no_cuda=True if args.local_run else False,
@@ -194,13 +183,19 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          local_rank=os.environ.get("LOCAL_RANK", 0),
                                          save_total_limit=6,
                                          bf16=True,  # TODO: comment for lumi
+                                         report_to="all" if args.local_run else "wandb",
                                          )
 
 schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
+# mt5 version: getattr(lang_module.trainable_models['140207366527152'].base_model.model.base_model.encoder.block[2].layer[0].SelfAttention.q, "fao-LoraLangObjective_lora_B").default.weight
+# nllb version: getattr(lang_module.trainable_models['140344449624864'].base_model.model.base_model.model.model.encoder.layers[2].self_attn.v_proj, "fao-LoraLangObjective_lora_A").default.weight
+
 if not args.eval_run:
     adapter.train()
 else:
-    adapter.evaluate()
+    evaluation = adapter.evaluate()
+    print("Evaluation results: %s" % evaluation)
+print("Job done. Terminating.")
