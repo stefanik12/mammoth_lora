@@ -150,7 +150,8 @@ def init_objective(src_lang: str,
 
 objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
                                                                                        desc="Loading objectives...")]
-if args.pair_evaluation_langs:
+if args.pair_evaluation_langs and not args.freeze_shared_params:
+    # when we freeze_shared_params, we can not compute and compare their gradients
     eval_compared_lang_pairs = [tuple(pair.split(",")) for pair in args.pair_evaluation_langs.split(";")]
 
     eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.product(objectives, repeat=2)
@@ -175,7 +176,7 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          gradient_accumulation_steps=len(target_langs),
                                          logging_steps=50,
                                          eval_steps=500,
-                                         save_steps=4,
+                                         save_steps=1000,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
                                          no_cuda=True if args.local_run else False,
