@@ -9,6 +9,7 @@ from adaptor.evaluators.generative import BLEU
 from adaptor.objectives.objective_base import Objective
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from adaptor.utils import AdaptationDataset
+from peft.mixed_model import PEFT_TYPE_TO_MODEL_MAPPING
 from transformers import PreTrainedTokenizer
 
 
@@ -57,7 +58,7 @@ class LangGradients(ContrastiveEvaluator):
             if agg_grads is None:
                 agg_grads = {name: model.get_parameter(name).grad for name in param_names}
             else:
-                # running aggregation
+                # running average
                 new_grads_weight = (1 / norm)
                 agg_weight = (1 - (1 / norm))
                 agg_grads = {name: (agg_weight * agg_grads[name]) + (new_grads_weight * model.get_parameter(name).grad)
@@ -71,7 +72,13 @@ class LangGradients(ContrastiveEvaluator):
                  dataset: AdaptationDataset) -> Dict[str, float]:
         own_lang_params = set(n for n, p in self.ref_objective.compatible_head_model.named_parameters())
         other_lang_params = set(n for n, p in self.other_objective.compatible_head_model.named_parameters())
-        shared_params = own_lang_params & other_lang_params
+        if hasattr(self.ref_objective, "peft_config"):
+            peft_modules_prefix = PEFT_TYPE_TO_MODEL_MAPPING[self.ref_objective.peft_config.peft_type].prefix
+            shared_params = [p for p in own_lang_params if not "." + peft_modules_prefix in p]
+            own_params = [p for p in own_lang_params if "." + peft_modules_prefix in p]
+        else:
+            shared_params = own_lang_params & other_lang_params
+            own_params = shared_params
 
         # 1. compute gradients on the objective's dataset
         own_gradients = self._gradients_for_objective(self.ref_objective, shared_params)
@@ -101,6 +108,14 @@ class LangGradients(ContrastiveEvaluator):
                                 for p in own_gradients.keys()]
             out_dict["%s-%s" % (str(self), "cos_sim")] = torch.mean(torch.stack(all_cos)).item()
             out_dict["%s-%s" % (str(self), "dot_prod")] = torch.mean(torch.stack(all_dot_products)).item()
+
+        shared_gradients = torch.hstack([own_gradients[p].flatten() for p in shared_params]).mean()
+        out_dict["%s-%s" % (str(self), "shared-mean")] = shared_gradients
+        # logging of gradients for modules (applicable only for the modular training)
+        if own_params:
+            module_gradients = torch.hstack([own_gradients[p].flatten() for p in shared_params]).mean()
+            out_dict["%s-%s" % (str(self), "modules-mean")] = module_gradients
+
         return out_dict
 
     def __str__(self):
