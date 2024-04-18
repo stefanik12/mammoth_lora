@@ -78,7 +78,7 @@ class LangGradients(ContrastiveEvaluator):
             own_params = [p for p in own_lang_params if "." + peft_modules_prefix in p]
         else:
             shared_params = own_lang_params & other_lang_params
-            own_params = shared_params
+            own_params = own_lang_params - other_lang_params
 
         # 1. compute gradients on the objective's dataset
         own_gradients = self._gradients_for_objective(self.ref_objective, shared_params)
