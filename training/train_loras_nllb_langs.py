@@ -33,6 +33,8 @@ parser.add_argument("--target_langs", help="Coma-separated list of target langua
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
                                                     "(GradientDotProduct eval). Format: 'fur,tah;epo,est'", default="")
 parser.add_argument("--eval_batches", default=20, type=int)
+parser.add_argument("--eval_steps", default=500, type=int)
+parser.add_argument("--save_steps", default=500, type=int)
 parser.add_argument("--resume_from_checkpoint", help="Whether this is a continued training."
                                                      "Defaults to False", default="False", type=str)
 parser.add_argument("--baseline_training", help="Whether this is a training of the monolithic baseline."
@@ -175,8 +177,8 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          warmup_steps=5000,
                                          gradient_accumulation_steps=len(target_langs),
                                          logging_steps=50,
-                                         eval_steps=500,
-                                         save_steps=1000,
+                                         eval_steps=args.eval_steps,
+                                         save_steps=args.save_steps,
                                          num_train_epochs=10,
                                          evaluation_strategy="steps",
                                          no_cuda=True if args.local_run else False,
