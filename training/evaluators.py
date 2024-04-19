@@ -109,11 +109,11 @@ class LangGradients(ContrastiveEvaluator):
             out_dict["%s-%s" % (str(self), "cos_sim")] = torch.mean(torch.stack(all_cos)).item()
             out_dict["%s-%s" % (str(self), "dot_prod")] = torch.mean(torch.stack(all_dot_products)).item()
 
-        shared_gradients = torch.hstack([own_gradients[p].flatten().abs() for p in shared_params]).mean()
+        shared_gradients = torch.hstack([own_gradients[p].flatten().abs() for p in shared_params]).mean().item()
         out_dict["%s-%s" % (str(self), "shared-mean")] = shared_gradients
         # logging of gradients for modules (applicable only for the modular training)
         if own_params:
-            module_gradients = torch.hstack([own_gradients[p].flatten().abs() for p in shared_params]).mean()
+            module_gradients = torch.hstack([own_gradients[p].flatten().abs() for p in shared_params]).mean().item()
             out_dict["%s-%s" % (str(self), "modules-mean")] = module_gradients
 
         return out_dict
