@@ -30,6 +30,8 @@ parser.add_argument("--reset_weights", help="Whether to reset the base model's w
                     type=bool, default=False)
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
+parser.add_argument("--extra_eval_langs", help="Coma-separated list extra languages for evaluation in training. "
+                                               "E.g: `sgn,tah`. Defaults to empty.", default="")
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
                                                     "(GradientDotProduct eval). Format: 'fur,tah;epo,est'", default="")
 parser.add_argument("--eval_batches", default=20, type=int)
@@ -92,7 +94,8 @@ peft_config = LoraConfig(
 
 def init_objective(src_lang: str,
                    tgt_lang: str,
-                   base_data_dir="data/example_data_dir") -> Sequence2Sequence:
+                   base_data_dir="data/example_data_dir",
+                   is_eval_objective: bool = False) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
     # evaluation
@@ -118,8 +121,8 @@ def init_objective(src_lang: str,
 
     shared_args = [lang_module]
     shared_kwargs = {
-        "texts_or_path": os.path.join(lang_dir, "train.src.gz") if not args.eval_run else [],
-        "labels_or_path": os.path.join(lang_dir, "train.trg.gz") if not args.eval_run else [],
+        "texts_or_path": os.path.join(lang_dir, "train.src.gz") if not is_eval_objective else [],
+        "labels_or_path": os.path.join(lang_dir, "train.trg.gz") if not is_eval_objective else [],
         "val_texts_or_path": os.path.join(lang_dir, "test.src"),
         "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
         "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
@@ -150,13 +153,23 @@ def init_objective(src_lang: str,
     return objective
 
 
-objectives = [init_objective("eng", tgt_lang, args.base_data_dir) for tgt_lang in tqdm(target_langs,
-                                                                                       desc="Loading objectives...")]
+if args.extra_eval_langs:
+    eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=True)
+                       for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading objectives...")]
+else:
+    eval_objectives = []
+
+objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=args.eval_run)
+              for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
+
+
 if args.pair_evaluation_langs and not args.freeze_shared_params:
     # when we freeze_shared_params, we can not compute and compare their gradients
     eval_compared_lang_pairs = [tuple(pair.split(",")) for pair in args.pair_evaluation_langs.split(";")]
 
-    eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.product(objectives, repeat=2)
+    all_objectives = objectives + eval_objectives
+
+    eval_objective_pairs = [(ref_o, comp_o) for ref_o, comp_o in itertools.product(all_objectives, repeat=2)
                             if (ref_o.given_id, comp_o.given_id) in eval_compared_lang_pairs]
     print("Performing comparative evaluation on the following language pairs: %s"
           % [(ref_o.target_lang_id, comp_o.target_lang_id) for ref_o, comp_o in eval_objective_pairs])
@@ -185,11 +198,11 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          save_peft_base_model=True,
                                          local_rank=os.environ.get("LOCAL_RANK", 0),
                                          save_total_limit=6,
-                                         bf16=True,  # TODO: comment for lumi
+                                         bf16=True,  # TODO: comment for puhti
                                          report_to="all" if args.local_run else "wandb",
                                          )
 
-schedule = ParallelSchedule(objectives=objectives, args=training_arguments)
+schedule = ParallelSchedule(objectives=objectives, args=training_arguments, extra_eval_objectives=eval_objectives)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
