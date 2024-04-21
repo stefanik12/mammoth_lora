@@ -25,7 +25,7 @@ class StridedSchedule(Schedule):
         :return: Iterator over the references to objectives.
         """
         # infinite loop - termination is determined by _should_stop() + _combine_datasets()
-        objectives_loop = itertools.cycle(self.objectives[split])
+        objectives_loop = itertools.cycle(self.objectives[split].values())
 
         while True:
             current_objective = next(objectives_loop)
