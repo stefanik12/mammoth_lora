@@ -14,6 +14,7 @@ from tqdm import tqdm
 from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
 from training.evaluators import LangGradients, CustomBLEU
 from training.langs import nllb_eng_src_in_tatoeba
+from training.strided_schedule import StridedSchedule
 
 torch.multiprocessing.set_start_method('spawn')
 
@@ -34,6 +35,8 @@ parser.add_argument("--extra_eval_langs", help="Coma-separated list extra langua
                                                "E.g: `sgn,tah`. Defaults to empty.", default="")
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
                                                     "(GradientDotProduct eval). Format: 'fur,tah;epo,est'", default="")
+parser.add_argument("--samples_per_lang", help="Number of batches to sample in training from single lang. Default (1)"
+                                               " means sample training batch from all languages", default=1, type=int)
 parser.add_argument("--eval_batches", default=20, type=int)
 parser.add_argument("--eval_steps", default=500, type=int)
 parser.add_argument("--save_steps", default=500, type=int)
@@ -188,7 +191,7 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          do_train=True,
                                          do_eval=True,
                                          warmup_steps=5000,
-                                         gradient_accumulation_steps=len(target_langs),
+                                         gradient_accumulation_steps=len(target_langs) if args.samples_per_lang == 1 else 32,
                                          logging_steps=50,
                                          eval_steps=args.eval_steps,
                                          save_steps=args.save_steps,
@@ -202,7 +205,12 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          report_to="all" if args.local_run else "wandb",
                                          )
 
-schedule = ParallelSchedule(objectives=objectives, args=training_arguments, extra_eval_objectives=eval_objectives)
+scheduler_args = {"objectives": objectives, "args": training_arguments, "extra_eval_objectives": eval_objectives}
+
+if args.samples_per_lang == 1:
+    schedule = ParallelSchedule(**scheduler_args)
+else:
+    schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
