@@ -48,6 +48,10 @@ parser.add_argument("--freeze_shared_params", help="Whether to avoid training of
                                                    "shared parameters. Defaults to False", default="False", type=str)
 parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
                                                     "Defaults to True", default="True", type=str)
+parser.add_argument("--allow_unseen_langs", help="Whether the language_id must be included in the model's"
+                                                 "vocab. Note that if not, then models using `language_prefixes` in the"
+                                                 " decoder might be prefixed with an unknown token.",
+                    default="False", type=str)
 parser.add_argument("--local_run", default="False", type=str)
 parser.add_argument("--eval_run", default="False", type=str)
 
@@ -58,6 +62,7 @@ args.use_language_prefixes = args.use_language_prefixes.lower() != "false"
 args.local_run = args.local_run.lower() != "false"
 args.eval_run = args.eval_run.lower() != "false"
 args.freeze_shared_params = args.freeze_shared_params.lower() != "false"
+args.allow_unseen_langs = args.allow_unseen_langs.lower() != "false"
 
 print("Running with arguments: %s" % args)
 
@@ -108,11 +113,19 @@ def init_objective(src_lang: str,
     specific_tgt_lang = None
     if args.use_language_prefixes:
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
-            specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
-                                                   if tgt_lang in k)
-            specific_tgt_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(tgt_lang))
-            model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
-            specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(src_lang))
+            specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
+                                     if k.startswith(src_lang))
+            try:
+                specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
+                                                       if tgt_lang in k)
+                specific_tgt_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(tgt_lang))
+                model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
+            except StopIteration as e:
+                if args.allow_unseen_langs:
+                    tgt_token_id = next(l for l in lang_module.tokenizer.vocab.keys() if tgt_lang == l)
+                    model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
+                else:
+                    raise e
         else:
             # prefix source texts with prompt
             source_texts_prefix_fn = lambda src_text, lang: "Translate to %s: %s" % (lang, src_text)
@@ -123,9 +136,23 @@ def init_objective(src_lang: str,
                              generation_kwargs={**model_spec_generation_kwargs, **general_kwargs})]
 
     shared_args = [lang_module]
+    # resolve training path
+    if is_eval_objective:
+        src, tgt = [], []
+    else:
+        src = os.path.join(lang_dir, "train.src.gz")
+        if not os.path.exists(src):
+            src = os.path.join(lang_dir, "train.src")
+        assert os.path.exists(src), "Could not find %s to initialize %s objective." % (src, tgt_lang)
+
+        tgt = os.path.join(lang_dir, "train.trg.gz")
+        if not os.path.exists(tgt):
+            tgt = os.path.join(lang_dir, "train.trg")
+        assert os.path.exists(tgt), "Could not find %s to initialize %s objective." % (tgt, tgt_lang)
+
     shared_kwargs = {
-        "texts_or_path": os.path.join(lang_dir, "train.src.gz") if not is_eval_objective else [],
-        "labels_or_path": os.path.join(lang_dir, "train.trg.gz") if not is_eval_objective else [],
+        "texts_or_path": src,
+        "labels_or_path": tgt,
         "val_texts_or_path": os.path.join(lang_dir, "test.src"),
         "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
         "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
@@ -158,7 +185,7 @@ def init_objective(src_lang: str,
 
 if args.extra_eval_langs:
     eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=True)
-                       for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading objectives...")]
+                       for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading eval objectives...")]
 else:
     eval_objectives = []
 
