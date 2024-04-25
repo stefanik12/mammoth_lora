@@ -96,7 +96,7 @@ print("Model type: %s" % model_type)
 per_model_target_modules = {"facebook/nllb-200-distilled-600M": ["q_proj", "v_proj"]}
 
 peft_config = LoraConfig(
-        task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1,
+        task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=32, lora_alpha=32, lora_dropout=0.1,
         target_modules=per_model_target_modules.get(model_type, None)  # default for other models
 )
 
