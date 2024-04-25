@@ -29,6 +29,8 @@ for train_lang in training_langs:
             continue
         if "%s-%s" % (train_lang, eval_lang) in already_evaled:
             continue
+        if eval_lang in training_langs:
+            continue
         eval_src_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "src")))
         eval_tgt_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "trg")))
 
