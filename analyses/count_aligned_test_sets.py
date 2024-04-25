@@ -16,16 +16,21 @@ eval_langs = eval_langs.split(",")
 
 file_template = base_data_dir + "/eng-%s/test.%s"
 
-for train_lang, eval_lang in itertools.product(training_langs, eval_langs):
-    if os.path.exists(file_template % (train_lang, "src")):
-        train_tgt, eval_tgt = find_aligned_by_index(
-                list(AdaptationDataset.iter_text_file_per_line(file_template % (train_lang, "src"))),
-                list(AdaptationDataset.iter_text_file_per_line(file_template % (train_lang, "trg"))),
-                list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "src"))),
-                list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "trg")))
-        )
-        num_shared = len(train_tgt)
-    else:
-        num_shared = 0
+already_evaled = set()
 
-    print("%s and %s share %s test samples" % (train_lang, eval_lang, num_shared))
+for train_lang in training_langs:
+    train_src_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (train_lang, "src")))
+    train_tgt_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (train_lang, "src")))
+    for eval_lang in eval_langs:
+        if "%s-%s" % (train_lang, eval_lang) in already_evaled:
+            continue
+        eval_src_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "src")))
+        eval_tgt_all = list(AdaptationDataset.iter_text_file_per_line(file_template % (eval_lang, "src")))
+        if os.path.exists(file_template % (train_lang, "src")):
+            train_tgt, eval_tgt = find_aligned_by_index(train_src_all, train_tgt_all, eval_src_all, eval_tgt_all)
+            num_shared = len(train_tgt)
+        else:
+            num_shared = 0
+
+        print("%s and %s share %s test samples" % (train_lang, eval_lang, num_shared))
+        already_evaled.add("%s-%s" % (train_lang, eval_lang))
