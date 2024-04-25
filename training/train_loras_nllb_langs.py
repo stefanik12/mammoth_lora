@@ -8,12 +8,13 @@ from adaptor.lang_module import LangModule
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from adaptor.schedules import ParallelSchedule
 from adaptor.utils import AdaptationArguments, StoppingStrategy, SavingStrategy
+from datasets import load_dataset
 from peft import LoraConfig, TaskType
 from tqdm import tqdm
 
+from training.evaluators import LangGradients, FloresBLEU
+from training.langs import nllb_eng_src_in_tatoeba, flores200_langs
 from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
-from training.evaluators import LangGradients, CustomBLEU
-from training.langs import nllb_eng_src_in_tatoeba
 from training.strided_schedule import StridedSchedule
 
 torch.multiprocessing.set_start_method('spawn')
@@ -122,7 +123,7 @@ def init_objective(src_lang: str,
                 model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
             except StopIteration as e:
                 if args.allow_unseen_langs:
-                    tgt_token_id = next(l for l in lang_module.tokenizer.vocab.keys() if tgt_lang == l)
+                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if tgt_lang == t)
                     model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
                 else:
                     raise e
@@ -132,7 +133,7 @@ def init_objective(src_lang: str,
 
     general_kwargs = {"max_length": 128}
 
-    evaluators = [CustomBLEU(decides_convergence=True,
+    evaluators = [FloresBLEU(decides_convergence=True,
                              generation_kwargs={**model_spec_generation_kwargs, **general_kwargs})]
 
     shared_args = [lang_module]
@@ -150,11 +151,26 @@ def init_objective(src_lang: str,
             tgt = os.path.join(lang_dir, "train.trg")
         assert os.path.exists(tgt), "Could not find %s to initialize %s objective." % (tgt, tgt_lang)
 
+    # with a priority, load aligned dev sets for all the languages from FLORES
+    try:
+        # find the matching language pair in the flores list of langs
+        fl_src_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(src_lang))
+        fl_tgt_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(tgt_lang))
+        flores_dataset = load_dataset("Muennighoff/flores200", "%s-%s" % (fl_src_lang, fl_tgt_lang), split="dev")
+        val_src = flores_dataset['sentence_%s' % fl_src_lang]
+        val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
+
+    except StopIteration:
+        # ValueError: BuilderConfig 'hun_Latn-est_adf' not found.
+        # resort do a test split from Tatoeba training resources
+        val_src = os.path.join(lang_dir, "test.src")
+        val_tgt = os.path.join(lang_dir, "test.trg")
+
     shared_kwargs = {
         "texts_or_path": src,
         "labels_or_path": tgt,
-        "val_texts_or_path": os.path.join(lang_dir, "test.src"),
-        "val_labels_or_path": os.path.join(lang_dir, "test.trg"),
+        "val_texts_or_path": val_src,
+        "val_labels_or_path": val_tgt,
         "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
         "target_lang_id": specific_tgt_lang if specific_tgt_lang is not None else tgt_lang,
         "batch_size": 1,

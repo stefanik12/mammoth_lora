@@ -13,7 +13,7 @@ from peft.mixed_model import PEFT_TYPE_TO_MODEL_MAPPING
 from transformers import PreTrainedTokenizer
 
 
-class CustomBLEU(BLEU):
+class FloresBLEU(BLEU):
 
     def evaluate_str(self, expected_list, actual_list) -> float:
         expected_nonempty = [e for e, a in zip(expected_list, actual_list) if e and a]
