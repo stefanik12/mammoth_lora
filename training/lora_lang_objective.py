@@ -129,7 +129,7 @@ class LoraLangObjective(Sequence2SequenceBaseline):
 
     def register_compatible_head_model(self, *args, **kwargs) -> torch.nn.Module:
         # first, get the new module for this target lang: registration method will perform parameter merging
-        super(Sequence2Sequence, self).register_compatible_head_model(*args, **kwargs)
+        super(Sequence2SequenceBaseline, self).register_compatible_head_model(*args, **kwargs)
         lang_module = args[0]
         # rename PEFT components with lang_src-lang_tgt id, so that they are not merged within other modules
         peft_modules_prefix = PEFT_TYPE_TO_MODEL_MAPPING[self.peft_config.peft_type].prefix

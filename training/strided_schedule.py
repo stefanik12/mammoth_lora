@@ -1,10 +1,10 @@
 import itertools
 import logging
+import os
 from typing import Iterator
 
 from adaptor.objectives.objective_base import Objective
 from adaptor.schedules import Schedule
-
 
 logger = logging.getLogger()
 
@@ -16,6 +16,9 @@ class StridedSchedule(Schedule):
     def __init__(self, *args, num_batches_per_objective: int, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.num_batches_per_objective = num_batches_per_objective
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.process_rank = int(os.environ.get("RANK", 0))
+        logger.warning("Initializing Schedule with rank %s", self.process_rank)
 
     def _sample_objectives(self, split: str) -> Iterator[Objective]:
         """
@@ -25,7 +28,12 @@ class StridedSchedule(Schedule):
         :return: Iterator over the references to objectives.
         """
         # infinite loop - termination is determined by _should_stop() + _combine_datasets()
-        objectives_loop = itertools.cycle(self.objectives[split].values())
+        if self.world_size >= len(self.objectives[split]):
+            # if this training runs with more processes than objectives, each process samples exclusive objectives
+            objectives_loop = itertools.cycle([o for i, o in enumerate(self.objectives[split].values())
+                                               if i % self.world_size == self.process_rank])
+        else:
+            objectives_loop = itertools.cycle(self.objectives[split].values())
 
         while True:
             current_objective = next(objectives_loop)
