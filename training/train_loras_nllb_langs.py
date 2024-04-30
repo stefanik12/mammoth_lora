@@ -40,6 +40,7 @@ parser.add_argument("--samples_per_lang", help="Number of batches to sample in t
                                                " means sample training batch from all languages", default=1, type=int)
 parser.add_argument("--eval_batches", default=20, type=int)
 parser.add_argument("--eval_steps", default=500, type=int)
+parser.add_argument("--eval_on_flores", default="True", type=str)
 parser.add_argument("--save_steps", default=500, type=int)
 parser.add_argument("--resume_from_checkpoint", help="Whether this is a continued training."
                                                      "Defaults to False", default="False", type=str)
@@ -64,8 +65,10 @@ args.local_run = args.local_run.lower() != "false"
 args.eval_run = args.eval_run.lower() != "false"
 args.freeze_shared_params = args.freeze_shared_params.lower() != "false"
 args.allow_unseen_langs = args.allow_unseen_langs.lower() != "false"
+args.eval_on_flores = args.eval_on_flores.lower() != "false"
 
 print("Running with arguments: %s" % args)
+print("Training World size: %s" % int(os.environ.get("WORLD_SIZE", 1)))
 
 if args.resume_from_checkpoint:
     # remove the checkpoint-X part of path
@@ -152,17 +155,21 @@ def init_objective(src_lang: str,
         assert os.path.exists(tgt), "Could not find %s to initialize %s objective." % (tgt, tgt_lang)
 
     # with a priority, load aligned dev sets for all the languages from FLORES
-    try:
-        # find the matching language pair in the flores list of langs
-        fl_src_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(src_lang))
-        fl_tgt_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(tgt_lang))
-        flores_dataset = load_dataset("Muennighoff/flores200", "%s-%s" % (fl_src_lang, fl_tgt_lang), split="dev")
-        val_src = flores_dataset['sentence_%s' % fl_src_lang]
-        val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
+    if args.eval_on_flores:
+        try:
+            # find the matching language pair in the flores list of langs
+            fl_src_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(src_lang))
+            fl_tgt_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(tgt_lang))
+            flores_dataset = load_dataset("Muennighoff/flores200", "%s-%s" % (fl_src_lang, fl_tgt_lang), split="dev")
+            val_src = flores_dataset['sentence_%s' % fl_src_lang]
+            val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
 
-    except StopIteration:
-        # ValueError: BuilderConfig 'hun_Latn-est_adf' not found.
-        # resort do a test split from Tatoeba training resources
+        except StopIteration:
+            # ValueError: BuilderConfig 'hun_Latn-est_adf' not found.
+            # resort do a test split from Tatoeba training resources
+            val_src = os.path.join(lang_dir, "test.src")
+            val_tgt = os.path.join(lang_dir, "test.trg")
+    else:
         val_src = os.path.join(lang_dir, "test.src")
         val_tgt = os.path.join(lang_dir, "test.trg")
 
@@ -225,6 +232,7 @@ if args.pair_evaluation_langs and not args.freeze_shared_params:
     objectives[0].evaluators["eval"] += pair_evaluators
 
 saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
+accum_steps = (32 // int(os.environ.get("WORLD_SIZE", 1))) if not args.local_run else 1
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          learning_rate=2e-5,
@@ -234,7 +242,7 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          do_train=True,
                                          do_eval=True,
                                          warmup_steps=5000,
-                                         gradient_accumulation_steps=32 if not args.local_run else 1,
+                                         gradient_accumulation_steps=accum_steps,
                                          logging_steps=50,
                                          eval_steps=args.eval_steps,
                                          save_steps=args.save_steps,
