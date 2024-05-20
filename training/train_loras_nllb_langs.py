@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+from typing import Optional
 
 import torch
 from adaptor.adapter import Adapter
@@ -32,6 +33,8 @@ parser.add_argument("--reset_weights", help="Whether to reset the base model's w
                     type=bool, default=False)
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
+parser.add_argument("--inverse_direction", help="Inverse direction of translation, i.e. with eng as target."
+                                                " Defaults to false.", default="False")
 parser.add_argument("--extra_eval_langs", help="Coma-separated list extra languages for evaluation in training. "
                                                "E.g: `sgn,tah`. Defaults to empty.", default="")
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
@@ -66,6 +69,7 @@ args.eval_run = args.eval_run.lower() != "false"
 args.freeze_shared_params = args.freeze_shared_params.lower() != "false"
 args.allow_unseen_langs = args.allow_unseen_langs.lower() != "false"
 args.eval_on_flores = args.eval_on_flores.lower() != "false"
+args.inverse_direction = args.inverse_direction.lower() != "false"
 
 print("Running with arguments: %s" % args)
 print("Training World size: %s" % int(os.environ.get("WORLD_SIZE", 1)))
@@ -107,7 +111,8 @@ peft_config = LoraConfig(
 def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
-                   is_eval_objective: bool = False) -> Sequence2Sequence:
+                   is_eval_objective: bool = False,
+                   inverse_inference_oid: Optional[int] = None) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
     # evaluation
@@ -119,14 +124,14 @@ def init_objective(src_lang: str,
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
             specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                      if k.startswith(src_lang))
+            forced_bos_lang = tgt_lang if not args.inverse_direction else src_lang
             try:
                 specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
-                                                       if tgt_lang in k)
-                specific_tgt_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items() if k.startswith(tgt_lang))
+                                                       if k.startswith(forced_bos_lang))
                 model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
             except StopIteration as e:
                 if args.allow_unseen_langs:
-                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if tgt_lang == t)
+                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if forced_bos_lang == t)
                     model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
                 else:
                     raise e
@@ -157,12 +162,16 @@ def init_objective(src_lang: str,
     # with a priority, load aligned dev sets for all the languages from FLORES
     if args.eval_on_flores:
         try:
-            # find the matching language pair in the flores list of langs
-            fl_src_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(src_lang))
-            fl_tgt_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(tgt_lang))
-            flores_dataset = load_dataset("Muennighoff/flores200", "%s-%s" % (fl_src_lang, fl_tgt_lang), split="dev")
-            val_src = flores_dataset['sentence_%s' % fl_src_lang]
-            val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
+            if src_lang != tgt_lang:
+                # find the matching language pair in the flores list of langs
+                fl_src_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(src_lang))
+                fl_tgt_lang = next(fl_lang for fl_lang in flores200_langs if fl_lang.startswith(tgt_lang))
+                flores_dataset = load_dataset("Muennighoff/flores200", "%s-%s" % (fl_src_lang, fl_tgt_lang), split="dev")
+                val_src = flores_dataset['sentence_%s' % fl_src_lang]
+                val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
+            else:
+                # special case: init of objective solely to register the module -- no training or eval dataset is used
+                val_src, val_tgt = [], []
 
         except StopIteration:
             # ValueError: BuilderConfig 'hun_Latn-est_adf' not found.
@@ -185,6 +194,7 @@ def init_objective(src_lang: str,
         "objective_id": tgt_lang,
         "source_texts_prefix_fn": source_texts_prefix_fn,
         "max_samples_per_eval_log": args.eval_batches,
+        "inverse_direction": args.inverse_direction,
     }
 
     try:

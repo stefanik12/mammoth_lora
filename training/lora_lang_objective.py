@@ -1,21 +1,26 @@
 import copy
 import functools
 import logging
-from typing import Any, List, Union, Dict, Optional, Tuple, Iterable, Callable
+from typing import Any, List, Union, Dict, Optional, Tuple, Iterable, Callable, Iterator
 
 import torch
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from peft import PeftConfig, get_peft_model
 from peft.peft_model import PEFT_TYPE_TO_MODEL_MAPPING
-from transformers import DataCollatorForSeq2Seq
+from transformers import DataCollatorForSeq2Seq, BatchEncoding
+from transformers.modeling_outputs import Seq2SeqLMOutput
 
 logger = logging.getLogger()
 
 
 class Sequence2SequenceBaseline(Sequence2Sequence):
 
-    def __init__(self, *args, source_texts_prefix_fn: Optional[Callable[[str, str], str]] = None, **kwargs):
+    def __init__(self, *args,
+                 source_texts_prefix_fn: Optional[Callable[[str, str], str]] = None,
+                 inverse_direction: bool = False,
+                 **kwargs):
         self.source_texts_prefix_fn = source_texts_prefix_fn
+        self.inverse_direction = inverse_direction
         super().__init__(*args, **kwargs)
 
         self.collator = DataCollatorForSeq2Seq(self.tokenizer, self.compatible_head_model,
@@ -61,8 +66,14 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
     def _per_split_iterators(self, split: str) -> Union[Tuple[Iterable[str], Iterable[str]],
                                                         Tuple[Iterable[str], Iterable[str], Iterable[str]]]:
         sources_iter, targets_iter = super()._per_split_iterators(split)
+        if self.inverse_direction:
+            logger.warning("Changing translation direction (to %s->%s) for objective %s",
+                           self.target_lang_id, self.source_lang_id, self.given_id)
+            sources_iter, targets_iter = targets_iter, sources_iter
+
         if self.source_texts_prefix_fn is not None:
-            sources_iter = map(lambda src_text: self.source_texts_prefix_fn(src_text, self.target_lang_id), sources_iter)
+            objective_lang = self.target_lang_id if not self.inverse_direction else self.source_lang_id
+            sources_iter = map(lambda src_text: self.source_texts_prefix_fn(src_text, objective_lang), sources_iter)
         return sources_iter, targets_iter
 
 
