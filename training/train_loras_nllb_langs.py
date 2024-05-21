@@ -33,8 +33,8 @@ parser.add_argument("--reset_weights", help="Whether to reset the base model's w
                     type=bool, default=False)
 parser.add_argument("--target_langs", help="Coma-separated list of target languages. E.g: "
                                            "`sgn,tah`. Defaults to the NLLB's target languages.", default="")
-parser.add_argument("--inverse_direction", help="Inverse direction of translation, i.e. with eng as target."
-                                                " Defaults to false.", default="False")
+parser.add_argument("--translation_direction", help="Direction of translation to train on. One of: `from-eng`, "
+                                                    "`to-eng`, `both`  Defaults to `from-eng`.", default="from-eng")
 parser.add_argument("--extra_eval_langs", help="Coma-separated list extra languages for evaluation in training. "
                                                "E.g: `sgn,tah`. Defaults to empty.", default="")
 parser.add_argument("--pair_evaluation_langs", help="Language pairs on which to perform pair evaluations"
@@ -53,6 +53,9 @@ parser.add_argument("--freeze_shared_params", help="Whether to avoid training of
                                                    "shared parameters. Defaults to False", default="False", type=str)
 parser.add_argument("--use_language_prefixes", help="Whether to prefix expected outputs with language_id."
                                                     "Defaults to True", default="True", type=str)
+parser.add_argument("--lang_margin_loss_weight", help="Whether to also train in the inverse language translation."
+                                                      "Needed for enforcing language independence regularization.",
+                    default=0., type=float)
 parser.add_argument("--allow_unseen_langs", help="Whether the language_id must be included in the model's"
                                                  "vocab. Note that if not, then models using `language_prefixes` in the"
                                                  " decoder might be prefixed with an unknown token.",
@@ -69,7 +72,6 @@ args.eval_run = args.eval_run.lower() != "false"
 args.freeze_shared_params = args.freeze_shared_params.lower() != "false"
 args.allow_unseen_langs = args.allow_unseen_langs.lower() != "false"
 args.eval_on_flores = args.eval_on_flores.lower() != "false"
-args.inverse_direction = args.inverse_direction.lower() != "false"
 
 print("Running with arguments: %s" % args)
 print("Training World size: %s" % int(os.environ.get("WORLD_SIZE", 1)))
@@ -112,7 +114,8 @@ def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
-                   inverse_inference_oid: Optional[int] = None) -> Sequence2Sequence:
+                   inverse_inference_oid: Optional[int] = None,
+                   inverse_lang_direction: bool = False) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
     # evaluation
@@ -124,7 +127,7 @@ def init_objective(src_lang: str,
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
             specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                      if k.startswith(src_lang))
-            forced_bos_lang = tgt_lang if not args.inverse_direction else src_lang
+            forced_bos_lang = tgt_lang if not inverse_lang_direction else src_lang
             try:
                 specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                                        if k.startswith(forced_bos_lang))
@@ -182,6 +185,8 @@ def init_objective(src_lang: str,
         val_src = os.path.join(lang_dir, "test.src")
         val_tgt = os.path.join(lang_dir, "test.trg")
 
+    obj_id = ("%s-%s" % (src_lang, tgt_lang)) if not inverse_lang_direction else ("%s-%s" % (tgt_lang, src_lang))
+
     shared_kwargs = {
         "texts_or_path": src,
         "labels_or_path": tgt,
@@ -191,10 +196,10 @@ def init_objective(src_lang: str,
         "target_lang_id": specific_tgt_lang if specific_tgt_lang is not None else tgt_lang,
         "batch_size": 1,
         "val_evaluators": evaluators,
-        "objective_id": tgt_lang,
+        "objective_id": obj_id,
         "source_texts_prefix_fn": source_texts_prefix_fn,
         "max_samples_per_eval_log": args.eval_batches,
-        "inverse_direction": args.inverse_direction,
+        "inverse_direction": inverse_lang_direction,
     }
 
     try:
@@ -216,15 +221,34 @@ def init_objective(src_lang: str,
     return objective
 
 
+# TODO: resolve Objective for English
+# TODO: does not have to be among the training objectives
+# TODO: But we'll need to take care of the training arguments -- e.g. 'source_texts_prefix_fn'?
+if args.lang_margin_loss_weight:
+    english_objective = init_objective("eng", "eng", is_eval_objective=True)
+    english_objective_id = id(english_objective)
+else:
+    english_objective_id = None
+
 if args.extra_eval_langs:
     eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=True)
                        for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading eval objectives...")]
 else:
     eval_objectives = []
 
-objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=args.eval_run)
-              for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
+objectives = []
 
+if args.translation_direction in ("from-eng", "both"):
+    objectives += [init_objective("eng", tgt_lang, args.base_data_dir,
+                                  is_eval_objective=args.eval_run,
+                                  inverse_inference_oid=english_objective_id)
+                   for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
+if args.translation_direction in ("to-eng", "both"):
+    objectives += [init_objective("eng", tgt_lang, args.base_data_dir,
+                                  is_eval_objective=args.eval_run,
+                                  inverse_inference_oid=english_objective_id,
+                                  inverse_lang_direction=True)
+                   for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
 
 if args.pair_evaluation_langs and not args.freeze_shared_params:
     # when we freeze_shared_params, we can not compute and compare their gradients
