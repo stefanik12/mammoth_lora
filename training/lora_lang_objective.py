@@ -259,7 +259,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
                 loss_fn = torch.nn.TripletMarginLoss(margin=self.semantic_over_lang_sim_margin)
                 # Arguments format:       (anchor, positive, negative)
-                out_loss += loss_fn(anchor_hidden, positive_hidden, negative_hidden) / anchor_hidden.numel()
+                out_loss += loss_fn(anchor_hidden, positive_hidden, negative_hidden)
 
             return out_loss
         else:
