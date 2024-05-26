@@ -187,11 +187,16 @@ def init_objective(src_lang: str,
 
     obj_id = ("%s-%s" % (src_lang, tgt_lang)) if not inverse_lang_direction else ("%s-%s" % (tgt_lang, src_lang))
 
+    objective_src_lang = specific_src_lang if specific_src_lang is not None else src_lang
+    objective_tgt_lang = specific_tgt_lang if specific_tgt_lang is not None else tgt_lang
+    if inverse_lang_direction:
+        objective_src_lang, objective_tgt_lang = objective_tgt_lang, objective_src_lang
+
     shared_kwargs = {
         "texts_or_path": src,
         "labels_or_path": tgt,
-        "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
-        "target_lang_id": specific_tgt_lang if specific_tgt_lang is not None else tgt_lang,
+        "source_lang_id": objective_src_lang,
+        "target_lang_id": objective_tgt_lang,
         "batch_size": 2,
         "val_evaluators": evaluators,
         "objective_id": obj_id,
@@ -245,7 +250,12 @@ for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
                                        )
         objectives.append(bwd_objective)
     if args.translation_direction == "both" and args.lang_margin_loss_weight:
+        # model's forward() should define the routing
+        fwd_model = fwd_objective.compatible_head_model
+        obj_model = fwd_model.base_model.model if not args.baseline_training else fwd_model  # differs for lora vs. base
         reg_objective = LangIndependenceRegularizer(lang_module,
+                                                    objective_module=obj_model,  # if given, LangModule does not merge
+                                                    merge_objective_module=False,
                                                     texts_or_path=[],
                                                     objectives=(fwd_objective, bwd_objective),
                                                     max_samples_per_eval_log=args.eval_batches,

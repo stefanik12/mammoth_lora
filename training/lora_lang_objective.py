@@ -174,7 +174,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
     def __init__(self, *args,
                  objectives: Tuple[Objective, Objective],
-                 semantic_over_lang_sim_margin: float = 0.05,
+                 semantic_over_lang_sim_margin: float = 100.,
                  embeddings_pooling_strategy: str = "mean",
                  **kwargs):
         assert "peft_objective" not in kwargs, "We don't want to regularize on a new module, but the original model"
