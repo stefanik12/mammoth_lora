@@ -260,7 +260,9 @@ for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
                                                     objectives=(fwd_objective, bwd_objective),
                                                     max_samples_per_eval_log=args.eval_batches,
                                                     loss_weight=args.lang_margin_loss_weight,
-                                                    semantic_over_lang_sim_margin=45.24)
+                                                    # semantic_over_lang_sim_margin=45.24  # non-normalized
+                                                    semantic_over_lang_sim_margin=1.
+                                                    )
         objectives.append(reg_objective)
 
 if args.pair_evaluation_langs and not args.freeze_shared_params:
