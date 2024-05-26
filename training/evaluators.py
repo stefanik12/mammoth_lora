@@ -37,7 +37,7 @@ class ContrastiveEvaluator(EvaluatorBase, abc.ABC):
 
 class LangGradients(ContrastiveEvaluator):
 
-    def __init__(self, *args, grouping: str = "per-layer", **kwargs):
+    def __init__(self, *args, grouping: str = "all", **kwargs):
         super().__init__(*args, **kwargs)
         self.grouping = grouping
 

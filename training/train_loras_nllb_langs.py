@@ -13,9 +13,10 @@ from datasets import load_dataset
 from peft import LoraConfig, TaskType
 from tqdm import tqdm
 
+from training.custom_langmodule import OutputReturningLangModule
 from training.evaluators import LangGradients, FloresBLEU
 from training.langs import nllb_eng_src_in_tatoeba, flores200_langs
-from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline
+from training.lora_lang_objective import LoraLangObjective, Sequence2SequenceBaseline, LangIndependenceRegularizer
 from training.strided_schedule import StridedSchedule
 
 torch.multiprocessing.set_start_method('spawn')
@@ -90,7 +91,7 @@ else:
 
 print("Checkpoint will be saved to '{}'".format(checkpoint_dir))
 
-lang_module = LangModule(args.base_model)
+lang_module = OutputReturningLangModule(args.base_model)
 
 if args.reset_weights:
     lang_module.reinit_base_model()
@@ -114,7 +115,7 @@ def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
-                   inverse_inference_oid: Optional[int] = None,
+                   # other_direction_obj: Optional[RegularizedLoraLangObjective] = None,
                    inverse_lang_direction: bool = False) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
@@ -127,14 +128,13 @@ def init_objective(src_lang: str,
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
             specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                      if k.startswith(src_lang))
-            forced_bos_lang = tgt_lang if not inverse_lang_direction else src_lang
             try:
                 specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
-                                                       if k.startswith(forced_bos_lang))
+                                                       if k.startswith(tgt_lang))
                 model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
             except StopIteration as e:
                 if args.allow_unseen_langs:
-                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if forced_bos_lang == t)
+                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if tgt_lang == t)
                     model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
                 else:
                     raise e
@@ -190,11 +190,9 @@ def init_objective(src_lang: str,
     shared_kwargs = {
         "texts_or_path": src,
         "labels_or_path": tgt,
-        "val_texts_or_path": val_src,
-        "val_labels_or_path": val_tgt,
         "source_lang_id": specific_src_lang if specific_src_lang is not None else src_lang,
         "target_lang_id": specific_tgt_lang if specific_tgt_lang is not None else tgt_lang,
-        "batch_size": 1,
+        "batch_size": 2,
         "val_evaluators": evaluators,
         "objective_id": obj_id,
         "source_texts_prefix_fn": source_texts_prefix_fn,
@@ -202,33 +200,29 @@ def init_objective(src_lang: str,
         "inverse_direction": inverse_lang_direction,
     }
 
-    try:
-        if args.baseline_training:
-            objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
-        else:
-            objective = LoraLangObjective(*shared_args, peft_config=peft_config,
-                                          freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
-    except FileNotFoundError as e:
-        # test split does not exist
+    if (isinstance(val_src, list) and isinstance(val_tgt, list)) or (os.path.exists(val_src) and os.path.exists(val_tgt)):
+        shared_kwargs["val_texts_or_path"] = val_src
+        shared_kwargs["val_labels_or_path"] = val_tgt
+    else:
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
-        shared_kwargs = {k: v for k, v in shared_kwargs.items() if "val" not in k}
-        if args.baseline_training:
-            objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
-        else:
-            objective = LoraLangObjective(*shared_args, peft_config=peft_config,
-                                          freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
 
+    if args.baseline_training:
+        objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
+    # elif args.lang_margin_loss_weight:
+    #     objective = RegularizedLoraLangObjective(*shared_args, peft_config=peft_config,
+    #                                              freeze_shared_params=args.freeze_shared_params,
+    #                                              other_direction_obj=other_direction_obj,
+    #                                              lang_margin_loss_weight=args.lang_margin_loss_weight,
+    #                                              **shared_kwargs)
+    else:
+        objective = LoraLangObjective(*shared_args, peft_config=peft_config,
+                                      freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
     return objective
 
 
 # TODO: resolve Objective for English
 # TODO: does not have to be among the training objectives
 # TODO: But we'll need to take care of the training arguments -- e.g. 'source_texts_prefix_fn'?
-if args.lang_margin_loss_weight:
-    english_objective = init_objective("eng", "eng", is_eval_objective=True)
-    english_objective_id = id(english_objective)
-else:
-    english_objective_id = None
 
 if args.extra_eval_langs:
     eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=True)
@@ -238,17 +232,25 @@ else:
 
 objectives = []
 
-if args.translation_direction in ("from-eng", "both"):
-    objectives += [init_objective("eng", tgt_lang, args.base_data_dir,
-                                  is_eval_objective=args.eval_run,
-                                  inverse_inference_oid=english_objective_id)
-                   for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
-if args.translation_direction in ("to-eng", "both"):
-    objectives += [init_objective("eng", tgt_lang, args.base_data_dir,
-                                  is_eval_objective=args.eval_run,
-                                  inverse_inference_oid=english_objective_id,
-                                  inverse_lang_direction=True)
-                   for tgt_lang in tqdm(target_langs, desc="Loading objectives...")]
+for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
+    if args.translation_direction in ("from-eng", "both"):
+        fwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
+                                       is_eval_objective=args.eval_run, )
+        objectives.append(fwd_objective)
+    if args.translation_direction in ("to-eng", "both"):
+        bwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
+                                       is_eval_objective=args.eval_run,
+                                       inverse_lang_direction=True,
+                                       # other_direction_obj=fwd_objective if args.translation_direction == "both" else None
+                                       )
+        objectives.append(bwd_objective)
+    if args.translation_direction == "both" and args.lang_margin_loss_weight:
+        reg_objective = LangIndependenceRegularizer(lang_module,
+                                                    texts_or_path=[],
+                                                    objectives=(fwd_objective, bwd_objective),
+                                                    max_samples_per_eval_log=args.eval_batches,
+                                                    loss_weight=args.lang_margin_loss_weight)
+        objectives.append(reg_objective)
 
 if args.pair_evaluation_langs and not args.freeze_shared_params:
     # when we freeze_shared_params, we can not compute and compare their gradients
@@ -266,7 +268,7 @@ if args.pair_evaluation_langs and not args.freeze_shared_params:
     objectives[0].evaluators["eval"] += pair_evaluators
 
 saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
-accum_steps = (32 // int(os.environ.get("WORLD_SIZE", 1))) if not args.local_run else 1
+accum_steps = (32 // int(os.environ.get("WORLD_SIZE", 1))) if not args.local_run else 3
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          learning_rate=2e-5,
@@ -295,12 +297,19 @@ scheduler_args = {"objectives": objectives, "args": training_arguments, "extra_e
 if args.samples_per_lang == 1:
     schedule = ParallelSchedule(**scheduler_args)
 else:
-    schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang)
+    schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
+                               # paired=args.translation_direction == "both" and bool(args.lang_margin_loss_weight)
+                               )
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
 # mt5 version: getattr(lang_module.trainable_models['140207366527152'].base_model.model.base_model.encoder.block[2].layer[0].SelfAttention.q, "fao-LoraLangObjective_lora_B").default.weight
 # nllb version: getattr(lang_module.trainable_models['140344449624864'].base_model.model.base_model.model.model.encoder.layers[2].self_attn.v_proj, "fao-LoraLangObjective_lora_A").default.weight
+
+# TODO: these do not match now:
+# [lang_module.tokenizer.decode(x["input_ids"][1]) for x in itertools.islice(fwd_objective._get_inputs_iterator("eval"), 10)]
+# [lang_module.tokenizer.decode([l for l in x["labels"][1] if l > 0]) for x in itertools.islice(bwd_objective._get_inputs_iterator("eval"), 10)]
+# TODO: check encoded inputs for NLLB
 
 if not args.eval_run:
     adapter.train()
