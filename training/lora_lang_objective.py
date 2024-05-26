@@ -239,6 +239,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
             assert encoder_hidden is not None and decoder_hidden is not None, \
                 "Trained model does not seem to return hidden states."
             all_hidden = torch.hstack([encoder_hidden, decoder_hidden])
+            all_hidden = torch.nn.functional.normalize(all_hidden)
             return all_hidden[self.src_embeddings_mask], all_hidden[self.tgt_embeddings_mask]
         else:
             raise ValueError("This objective is now implemented only for encoder-decoder architectures.")
