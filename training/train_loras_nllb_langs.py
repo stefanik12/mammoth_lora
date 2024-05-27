@@ -1,11 +1,9 @@
 import argparse
 import itertools
 import os
-from typing import Optional
 
 import torch
 from adaptor.adapter import Adapter
-from adaptor.lang_module import LangModule
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from adaptor.schedules import ParallelSchedule
 from adaptor.utils import AdaptationArguments, StoppingStrategy, SavingStrategy
@@ -57,6 +55,10 @@ parser.add_argument("--use_language_prefixes", help="Whether to prefix expected 
 parser.add_argument("--lang_margin_loss_weight", help="Whether to also train in the inverse language translation."
                                                       "Needed for enforcing language independence regularization.",
                     default=0., type=float)
+parser.add_argument("--lang_margin", help="Expected margin between the distance of equivalent texts "
+                                          "in different langs and non-equivalent texts in the same language. Used only "
+                                          "for lang independence regularization, i.e. when lang_margin_loss_weight!=0",
+                    default=1., type=float)
 parser.add_argument("--allow_unseen_langs", help="Whether the language_id must be included in the model's"
                                                  "vocab. Note that if not, then models using `language_prefixes` in the"
                                                  " decoder might be prefixed with an unknown token.",
@@ -260,8 +262,8 @@ for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
                                                     objectives=(fwd_objective, bwd_objective),
                                                     max_samples_per_eval_log=args.eval_batches,
                                                     loss_weight=args.lang_margin_loss_weight,
-                                                    # semantic_over_lang_sim_margin=45.24  # non-normalized
-                                                    semantic_over_lang_sim_margin=1.
+                                                    # semantic_over_lang_sim_margin=45.24  # non-normalized default
+                                                    semantic_over_lang_sim_margin=args.lang_margin,
                                                     )
         objectives.append(reg_objective)
 
