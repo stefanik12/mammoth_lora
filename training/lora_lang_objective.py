@@ -201,8 +201,8 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
             bwd_iter = itertools.islice(bwd_iter, self.max_samples_per_log["eval"])
 
         # interleave two iterators: samples of both should be compatible with the base model
-        pad_token_t = torch.tensor(self.tokenizer.pad_token_id, device=self.compatible_head_model.device)
-        zero_token_t = torch.tensor(0, device=self.compatible_head_model.device)
+        pad_token_t = torch.tensor(self.tokenizer.pad_token_id)
+        zero_token_t = torch.tensor(0)
 
         def pad(encoding: BatchEncoding, key: str, expected_length: int, token_t: torch.Tensor) -> BatchEncoding:
             tensor = encoding[key]
