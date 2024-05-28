@@ -208,7 +208,7 @@ def init_objective(src_lang: str,
         "max_samples_per_eval_log": args.eval_batches,
         "inverse_direction": inverse_lang_direction,
         "objective_module": objective_module,
-        "merge_objective_module": objective_module is not None,
+        "merge_objective_module": objective_module is None,
     }
 
     if (isinstance(val_src, list) and isinstance(val_tgt, list)) or (os.path.exists(val_src) and os.path.exists(val_tgt)):
