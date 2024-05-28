@@ -1,10 +1,10 @@
 import itertools
 import logging
 import os
-from typing import Iterator
+from typing import Iterator, Iterable, Dict, Any
 
 from adaptor.objectives.objective_base import Objective
-from adaptor.schedules import Schedule
+from adaptor.schedules import Schedule, SequentialSchedule
 
 logger = logging.getLogger()
 
