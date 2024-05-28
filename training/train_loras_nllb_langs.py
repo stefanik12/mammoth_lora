@@ -1,7 +1,7 @@
 import argparse
 import itertools
 import os
-from typing import Optional
+from typing import Optional, List
 
 import torch
 from adaptor.adapter import Adapter
@@ -64,6 +64,9 @@ parser.add_argument("--allow_unseen_langs", help="Whether the language_id must b
                                                  "vocab. Note that if not, then models using `language_prefixes` in the"
                                                  " decoder might be prefixed with an unknown token.",
                     default="False", type=str)
+parser.add_argument("--modularization", help="In which way to modularize languages. "
+                                             "One of: `per-lang-pair`, `per-enc-dec-lang`.",
+                    default="per-lang-pair", type=str)
 parser.add_argument("--local_run", default="False", type=str)
 parser.add_argument("--eval_run", default="False", type=str)
 
@@ -119,6 +122,7 @@ def init_objective(src_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
                    inverse_lang_direction: bool = False,
+                   peft_target_modules: Optional[List[str]] = None,
                    objective_module: Optional[torch.nn.Module] = None) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
@@ -217,26 +221,61 @@ def init_objective(src_lang: str,
     else:
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
 
-    if args.baseline_training or is_eval_objective:
+    if (args.baseline_training or is_eval_objective) and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
     else:
-        objective = LoraLangObjective(*shared_args, peft_config=peft_config,
+        objective_peft_config = LoraConfig(
+                task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=32, lora_alpha=32, lora_dropout=0.1,
+                target_modules=peft_target_modules
+        )
+        objective = LoraLangObjective(*shared_args, peft_config=objective_peft_config,
                                       freeze_shared_params=args.freeze_shared_params, **shared_kwargs)
     return objective
 
+
 objectives = []
+
+# based on args.modularization, we filter the default target_modules for PEFT, or we use them as-is
+target_modules = per_model_target_modules.get(model_type, None)
+
+# if we filter out which parameters to modularize, we need to preload the model to get a list of all params
+if args.modularization == "per-enc-dec-lang":
+    print("Loading model %s to get a list of its parameters" % lang_module.model_name_or_path)
+    english_objective = init_objective("eng", "eng",
+                                       is_eval_objective=True, peft_target_modules=target_modules)
+    all_modules = [n for n, _ in english_objective.compatible_head_model.base_model.model.named_modules()]
 
 for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
     if args.translation_direction in ("from-eng", "both"):
+        if args.modularization == "per-enc-dec-lang":
+            # for "from-eng" direction, we parametrize (target) language in decoder
+            target_modules = [m for m in all_modules if "decoder." in m and any(m.endswith(p) for p in target_modules)]
+
         fwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
-                                       is_eval_objective=args.eval_run, )
+                                       peft_target_modules=target_modules,
+                                       is_eval_objective=args.eval_run,
+                                       )
+        if args.modularization == "per-enc-dec-lang":
+            # replace initialized encoder with the english one
+            fwd_objective.compatible_head_model.base_model.model.model.encoder \
+                = english_objective.compatible_head_model.base_model.model.model.encoder
+
         objectives.append(fwd_objective)
     if args.translation_direction in ("to-eng", "both"):
+        if args.modularization == "per-enc-dec-lang":
+            # for "to-eng" direction, we parametrize (source) language in encoder
+            target_modules = [m for m in all_modules if "encoder." in m and any(m.endswith(p) for p in target_modules)]
+
         bwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
+                                       peft_target_modules=target_modules,
                                        is_eval_objective=args.eval_run,
                                        inverse_lang_direction=True,
-                                       # other_direction_obj=fwd_objective if args.translation_direction == "both" else None
                                        )
+        if args.modularization == "per-enc-dec-lang":
+            # replace initialized encoder with the english one
+            bwd_objective.compatible_head_model.base_model.model.model.decoder \
+                = english_objective.compatible_head_model.base_model.model.model.decoder
+
         objectives.append(bwd_objective)
     if args.translation_direction == "both" and args.lang_margin_loss_weight:
         # model's forward() should define the routing
