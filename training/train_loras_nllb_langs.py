@@ -117,7 +117,6 @@ def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
-                   # other_direction_obj: Optional[RegularizedLoraLangObjective] = None,
                    inverse_lang_direction: bool = False) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
@@ -127,16 +126,17 @@ def init_objective(src_lang: str,
     specific_src_lang = None
     specific_tgt_lang = None
     if args.use_language_prefixes:
+        prefix_tgt_lang = tgt_lang if not inverse_lang_direction else src_lang
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
             specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                      if k.startswith(src_lang))
             try:
                 specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
-                                                       if k.startswith(tgt_lang))
+                                                       if k.startswith(prefix_tgt_lang))
                 model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
             except StopIteration as e:
                 if args.allow_unseen_langs:
-                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if tgt_lang == t)
+                    tgt_token_id = next(t_id for t, t_id in lang_module.tokenizer.vocab.items() if prefix_tgt_lang == t)
                     model_spec_generation_kwargs = {"forced_bos_token_id": tgt_token_id}
                 else:
                     raise e
@@ -215,12 +215,6 @@ def init_objective(src_lang: str,
 
     if args.baseline_training:
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
-    # elif args.lang_margin_loss_weight:
-    #     objective = RegularizedLoraLangObjective(*shared_args, peft_config=peft_config,
-    #                                              freeze_shared_params=args.freeze_shared_params,
-    #                                              other_direction_obj=other_direction_obj,
-    #                                              lang_margin_loss_weight=args.lang_margin_loss_weight,
-    #                                              **shared_kwargs)
     else:
         objective = LoraLangObjective(*shared_args, peft_config=peft_config,
                                       freeze_shared_params=args.freeze_shared_params, **shared_kwargs)

@@ -69,7 +69,7 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
                                                         Tuple[Iterable[str], Iterable[str], Iterable[str]]]:
         sources_iter, targets_iter = super()._per_split_iterators(split)
         if self.inverse_direction:
-            logger.warning("Changing translation direction (to %s->%s) for objective %s",
+            logger.info("Changing translation direction (to %s->%s) for objective %s",
                            self.target_lang_id, self.source_lang_id, self.given_id)
             sources_iter, targets_iter = targets_iter, sources_iter
 
