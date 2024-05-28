@@ -316,7 +316,7 @@ if args.samples_per_lang == 1:
     schedule = ParallelSchedule(**scheduler_args)
 else:
     schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
-                               # paired=args.translation_direction == "both" and bool(args.lang_margin_loss_weight)
+                               paired=args.translation_direction == "both" and bool(args.lang_margin_loss_weight)
                                )
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
