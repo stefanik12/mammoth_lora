@@ -26,5 +26,5 @@ There are a few controls you can tweak.
 
 
 ## todos
-[ ] decomposition from hell
-[ ] logging to file would be nice
+- [ ] decomposition from hell
+- [ ] logging to file would be nice
