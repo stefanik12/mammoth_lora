@@ -245,14 +245,19 @@ if args.modularization == "per-enc-dec-lang":
                                        is_eval_objective=True, peft_target_modules=target_modules)
     all_modules = [n for n, _ in english_objective.compatible_head_model.base_model.model.named_modules()]
 
-for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
+for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", total=len(target_langs)):
+    # if i % int(os.environ.get("WORLD_SIZE", 1)) != int(os.environ.get("RANK", 0)):
+    #     TODO: this will not work: we can not average gradients over different models! We need the same model
+    #     continue
+    peft_modules = target_modules
+
     if args.translation_direction in ("from-eng", "both"):
         if args.modularization == "per-enc-dec-lang":
             # for "from-eng" direction, we parametrize (target) language in decoder
-            target_modules = [m for m in all_modules if "decoder." in m and any(m.endswith(p) for p in target_modules)]
+            peft_modules = [m for m in all_modules if "decoder." in m and any(m.endswith(p) for p in target_modules)]
 
         fwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
-                                       peft_target_modules=target_modules,
+                                       peft_target_modules=peft_modules,
                                        is_eval_objective=args.eval_run,
                                        )
         if args.modularization == "per-enc-dec-lang":
@@ -264,10 +269,10 @@ for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
     if args.translation_direction in ("to-eng", "both"):
         if args.modularization == "per-enc-dec-lang":
             # for "to-eng" direction, we parametrize (source) language in encoder
-            target_modules = [m for m in all_modules if "encoder." in m and any(m.endswith(p) for p in target_modules)]
+            peft_modules = [m for m in all_modules if "encoder." in m and any(m.endswith(p) for p in target_modules)]
 
         bwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
-                                       peft_target_modules=target_modules,
+                                       peft_target_modules=peft_modules,
                                        is_eval_objective=args.eval_run,
                                        inverse_lang_direction=True,
                                        )
@@ -346,12 +351,11 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
 
 scheduler_args = {"objectives": objectives, "args": training_arguments, "extra_eval_objectives": eval_objectives}
 
-if args.samples_per_lang == 1:
-    schedule = ParallelSchedule(**scheduler_args)
-else:
-    schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
-                               paired=args.translation_direction == "both",
-                               )
+concurrently_sampled_objs = 1 if not args.translation_direction == "both" \
+                              else 2 if not args.lang_margin_loss_weight \
+                              else 3
+schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
+                           coupled_objs=concurrently_sampled_objs)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 

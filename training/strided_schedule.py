@@ -13,10 +13,10 @@ class StridedSchedule(Schedule):
 
     label = "sequential"
 
-    def __init__(self, *args, num_batches_per_objective: int, paired: bool = False, **kwargs) -> None:
+    def __init__(self, *args, num_batches_per_objective: int, coupled_objs: int = 1, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.num_batches_per_objective = num_batches_per_objective
-        self.paired = paired
+        self.coupled_objs = coupled_objs
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.process_rank = int(os.environ.get("RANK", 0))
         logger.warning("Initializing Schedule with rank %s", self.process_rank)
@@ -37,19 +37,12 @@ class StridedSchedule(Schedule):
             objectives_loop = itertools.cycle(self.objectives[split].values())
 
         while True:
-            if not self.paired:
-                current_objective = next(objectives_loop)
-                logger.info("Starting sampling from %s objective", str(current_objective))
-                for _ in range(self.num_batches_per_objective):
-                    yield current_objective
-            else:
-                # pairs of objectives following each other are guaranteed to have semantically aligned inputs
-                # alignment is necessary for language independence regularization in RegularizedLoraLangObjective
-                first_objective = next(objectives_loop)
-                second_objective = next(objectives_loop)
-                for _ in range(self.num_batches_per_objective):
-                    yield first_objective
-                    yield second_objective
+            # pairs of objectives following each other are guaranteed to have semantically aligned inputs
+            # alignment is necessary for language independence regularization in RegularizedLoraLangObjective
+            current_objectives_couple = [next(objectives_loop) for _ in range(self.coupled_objs)]
+            for _ in range(self.num_batches_per_objective):
+                for obj in current_objectives_couple:
+                    yield obj
 
     def _combine_datasets(self, split: str) -> Iterable[Dict[str, Any]]:
         """
