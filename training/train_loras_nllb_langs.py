@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+from typing import Optional
 
 import torch
 from adaptor.adapter import Adapter
@@ -117,7 +118,8 @@ def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
-                   inverse_lang_direction: bool = False) -> Sequence2Sequence:
+                   inverse_lang_direction: bool = False,
+                   objective_module: Optional[torch.nn.Module] = None) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
 
     # evaluation
@@ -205,6 +207,8 @@ def init_objective(src_lang: str,
         "source_texts_prefix_fn": source_texts_prefix_fn,
         "max_samples_per_eval_log": args.eval_batches,
         "inverse_direction": inverse_lang_direction,
+        "objective_module": objective_module,
+        "merge_objective_module": objective_module is not None,
     }
 
     if (isinstance(val_src, list) and isinstance(val_tgt, list)) or (os.path.exists(val_src) and os.path.exists(val_tgt)):
@@ -213,7 +217,7 @@ def init_objective(src_lang: str,
     else:
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
 
-    if args.baseline_training:
+    if args.baseline_training or is_eval_objective:
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
     else:
         objective = LoraLangObjective(*shared_args, peft_config=peft_config,
@@ -224,12 +228,6 @@ def init_objective(src_lang: str,
 # TODO: resolve Objective for English
 # TODO: does not have to be among the training objectives
 # TODO: But we'll need to take care of the training arguments -- e.g. 'source_texts_prefix_fn'?
-
-if args.extra_eval_langs:
-    eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir, is_eval_objective=True)
-                       for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading eval objectives...")]
-else:
-    eval_objectives = []
 
 objectives = []
 
@@ -260,6 +258,17 @@ for tgt_lang in tqdm(target_langs, desc="Loading objectives..."):
                                                     semantic_over_lang_sim_margin=args.lang_margin,
                                                     )
         objectives.append(reg_objective)
+
+if args.extra_eval_langs:
+    # eval objectives are always parametrized by the base model -- we do not train with them
+    base_model = objectives[0].compatible_head_model.base_model.model
+
+    eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir,
+                                      is_eval_objective=True, objective_module=base_model)
+                       for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading eval objectives...")]
+else:
+    eval_objectives = []
+
 
 if args.pair_evaluation_langs and not args.freeze_shared_params:
     # when we freeze_shared_params, we can not compute and compare their gradients
