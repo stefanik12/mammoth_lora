@@ -181,7 +181,8 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
         self.objectives = objectives  # must precede remaining initialization
         super().__init__(*args, peft_objective=False, batch_size=1, **kwargs)
-        self.val_texts = []  # overrides "is None" condition that skips this objective from evaluation (loss)
+        # self.val_texts = []  # TODO: remove
+        self.val_texts = objectives[0].val_texts  # do-eval condition should be consistent with underlying objectives
         self.dataset_length = self.objectives[0].dataset_length  # both objectives' datasets have identical length
         # TODO: check that self.compatible_head_model points to the base model
 
@@ -195,7 +196,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
     def _get_inputs_iterator(self, split: str) -> Iterable[Union[BatchEncoding, Dict[str, torch.Tensor]]]:
         fwd_iter, bwd_iter = (o._get_inputs_iterator(split) for o in self.objectives)
-        if self.max_samples_per_log[split] < self.objectives[0].dataset_length[split]:
+        if split == "eval" and self.max_samples_per_log["eval"] < self.objectives[0].dataset_length["eval"]:
             # cut only the selected number of batches from both iterators
             fwd_iter = itertools.islice(fwd_iter, self.max_samples_per_log["eval"])
             bwd_iter = itertools.islice(bwd_iter, self.max_samples_per_log["eval"])
