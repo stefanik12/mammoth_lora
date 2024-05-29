@@ -182,7 +182,8 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         self.objectives = objectives  # must precede remaining initialization
         super().__init__(*args, peft_objective=False, batch_size=1, **kwargs)
         # self.val_texts = []  # TODO: remove
-        self.val_texts = objectives[0].val_texts  # do-eval condition should be consistent with underlying objectives
+        # do-eval condition should be consistent with underlying objectives
+        self.val_texts, self.val_texts_path = objectives[0].val_texts, objectives[0].val_texts_path
         self.dataset_length = self.objectives[0].dataset_length  # both objectives' datasets have identical length
         # TODO: check that self.compatible_head_model points to the base model
 
