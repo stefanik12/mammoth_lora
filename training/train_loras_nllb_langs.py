@@ -125,6 +125,7 @@ def init_objective(src_lang: str,
                    peft_target_modules: Optional[List[str]] = None,
                    objective_module: Optional[torch.nn.Module] = None) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
+    # TODO: we need to fix languages: now we iterate only through the "e"+ target langs
 
     # evaluation
     model_spec_generation_kwargs = {}
@@ -351,11 +352,14 @@ training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
 
 scheduler_args = {"objectives": objectives, "args": training_arguments, "extra_eval_objectives": eval_objectives}
 
-concurrently_sampled_objs = 1 if not args.translation_direction == "both" \
-                              else 2 if not args.lang_margin_loss_weight \
-                              else 3
-schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
-                           coupled_objs=concurrently_sampled_objs)
+if args.samples_per_lang == 1:
+    schedule = ParallelSchedule(**scheduler_args)
+else:
+    concurrently_sampled_objs = 1 if not args.translation_direction == "both" \
+                                  else 2 if not args.lang_margin_loss_weight \
+                                  else 3
+    schedule = StridedSchedule(**scheduler_args, num_batches_per_objective=args.samples_per_lang,
+                               coupled_objs=concurrently_sampled_objs)
 
 adapter = Adapter(lang_module, schedule, args=training_arguments)
 
