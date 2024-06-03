@@ -183,7 +183,7 @@ def init_objective(src_lang: str,
                 val_tgt = flores_dataset['sentence_%s' % fl_tgt_lang]
             else:
                 # special case: init of objective solely to register the module -- no training or eval dataset is used
-                val_src, val_tgt = [], []
+                val_src, val_tgt = None, None
 
         except StopIteration:
             # ValueError: BuilderConfig 'hun_Latn-est_adf' not found.
@@ -193,6 +193,10 @@ def init_objective(src_lang: str,
     else:
         val_src = os.path.join(lang_dir, "test.src")
         val_tgt = os.path.join(lang_dir, "test.trg")
+    if isinstance(val_src, str) and not os.path.exists(val_src):
+        # if this is inferred path, check that it exists, or omit it from passing to validation (which would fail)
+        print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
+        val_src, val_tgt = None, None
 
     obj_id = ("%s-%s" % (src_lang, tgt_lang)) if not inverse_lang_direction else ("%s-%s" % (tgt_lang, src_lang))
 
@@ -217,9 +221,6 @@ def init_objective(src_lang: str,
         "objective_module": objective_module,
         "merge_objective_module": objective_module is None,
     }
-
-    if not val_src:
-        print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
 
     if (args.baseline_training or is_eval_objective) and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
