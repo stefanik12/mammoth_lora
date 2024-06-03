@@ -49,14 +49,17 @@ class StridedSchedule(Schedule):
         This overrides sequential sampling in evaluation -- that does not work with regularization,
         which requires paired sampling.
         """
-        if split == "train":  # Update: with OR for self.coupled_objs > 1 condition
-            objective_sampler = self._sample_objectives(split)
-        else:
-            # evaluation split uses simple, sequential evaluation over objectives
-            objective_sampler = SequentialSchedule.single_iteration_eval_sampling(self.objectives["eval"].values())
+        # if split == "train":  # Update: with OR for self.coupled_objs > 1 condition
+        objective_sampler = self._sample_objectives(split)
+        # else:
+        #     # evaluation split uses simple, sequential evaluation over objectives
+        #     objective_sampler = SequentialSchedule.single_iteration_eval_sampling(self.objectives["eval"].values())
+        if split == "eval":
+            objective_sampler = (o for o in self.objectives[split].values() if o.dataset_length["eval"])
 
         objectives_data_samplers = {obj: self._sample_objective_dataset(obj, obj_i, split)
                                     for obj_i, obj in enumerate(self.objectives[split].values())}
+
         for i, objective in enumerate(objective_sampler):
             try:
                 yield next(objectives_data_samplers[objective])
