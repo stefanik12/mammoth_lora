@@ -297,10 +297,10 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
                                                     # semantic_over_lang_sim_margin=45.24  # non-normalized default
                                                     semantic_over_lang_sim_margin=args.lang_margin,
                                                     )
-        assert fwd_objective.val_texts or fwd_objective.val_texts_path, "Val texts for all objectives should be filled"
-        x = next(iter(reg_objective.get_dataset("eval")))
-        outputs = obj_model(**{k: v for k, v in x.items() if k != "oid"})
-        print("Objective %s first eval loss: %s" % (reg_objective, outputs.loss.item()))
+        if fwd_objective.val_texts is not None or fwd_objective.val_texts_path is not None:
+            x = next(iter(reg_objective.get_dataset("eval")))
+            outputs = obj_model(**{k: v for k, v in x.items() if k != "oid"})
+            print("Objective %s first eval loss: %s" % (reg_objective, outputs.loss.item()))
         objectives.append(reg_objective)
 
 if args.extra_eval_langs:
