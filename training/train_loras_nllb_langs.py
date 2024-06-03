@@ -204,6 +204,8 @@ def init_objective(src_lang: str,
     shared_kwargs = {
         "texts_or_path": src,
         "labels_or_path": tgt,
+        "val_texts_or_path": val_src,
+        "val_labels_or_path": val_tgt,
         "source_lang_id": objective_src_lang,
         "target_lang_id": objective_tgt_lang,
         "batch_size": 2,
@@ -216,10 +218,7 @@ def init_objective(src_lang: str,
         "merge_objective_module": objective_module is None,
     }
 
-    if (isinstance(val_src, list) and isinstance(val_tgt, list)) or (os.path.exists(val_src) and os.path.exists(val_tgt)):
-        shared_kwargs["val_texts_or_path"] = val_src
-        shared_kwargs["val_labels_or_path"] = val_tgt
-    else:
+    if not val_src:
         print("Test split of %s-%s not found. We will not perform evaluation on this pair." % (src_lang, tgt_lang))
 
     if (args.baseline_training or is_eval_objective) and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
@@ -297,6 +296,10 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
                                                     # semantic_over_lang_sim_margin=45.24  # non-normalized default
                                                     semantic_over_lang_sim_margin=args.lang_margin,
                                                     )
+        assert fwd_objective.val_texts or fwd_objective.val_texts_path, "Val texts for all objectives should be filled"
+        x = next(iter(reg_objective.get_dataset("eval")))
+        outputs = obj_model(**{k: v for k, v in x.items() if k != "oid"})
+        print("Objective %s first eval loss: %s" % (reg_objective, outputs.loss.item()))
         objectives.append(reg_objective)
 
 if args.extra_eval_langs:
