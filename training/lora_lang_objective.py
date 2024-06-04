@@ -189,7 +189,8 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         self.val_texts, self.val_texts_path = objectives[0].val_texts, objectives[0].val_texts_path
         self.dataset_length = self.objectives[0].dataset_length  # both objectives' datasets have identical length
 
-        if self.dataset_length["eval"] < 2:
+        # TODO: fix this better (at least using self.objectives[0].batch_size)
+        if self.dataset_length["eval"] * 2 < self.max_samples_per_log["eval"]:
             # this is not acceptable: we need at least pairs of samples for both training and evaluation
             self.objectives[0].dataset_length["eval"] = 0
             self.val_texts, self.val_texts_path = None, None
@@ -207,7 +208,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         if split == "eval":
             # we must guarantee that both in-language and cross-language samples are paired,
             # otherwise applying embedding_mask-s fails
-            target_eval_length = min(self.max_samples_per_log["eval"], self.dataset_length["eval"])
+            target_eval_length = min(self.max_samples_per_log["eval"], self.dataset_length["eval"] * 2)
             if target_eval_length % 2 != 0:
                 target_eval_length = 2 * (target_eval_length // 2)
 
