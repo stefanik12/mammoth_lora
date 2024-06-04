@@ -56,6 +56,9 @@ class Sequence2SequenceBaseline(Sequence2Sequence):
             except IndexError:
                 logger.error("Error decoding sources of %s in %s", evaluator, self)
                 evaluator_value = float('inf') if evaluator.smaller_is_better else 0
+            except UnicodeDecodeError:
+                logger.error("Error reading sources for %s. Skipping from evaluation" % str(self))
+                evaluator_value = float('inf') if evaluator.smaller_is_better else 0
             try:
                 self.evaluations_history[split][evaluator].append(evaluator_value)
             except KeyError:
