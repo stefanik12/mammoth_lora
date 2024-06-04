@@ -200,10 +200,16 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
     def _get_inputs_iterator(self, split: str) -> Iterable[Union[BatchEncoding, Dict[str, torch.Tensor]]]:
         fwd_iter, bwd_iter = (o._get_inputs_iterator(split) for o in self.objectives)
-        if split == "eval" and self.max_samples_per_log["eval"] < self.objectives[0].dataset_length["eval"]:
+        if split == "eval":
+            # we must guarantee that both in-language and cross-language samples are paired,
+            # otherwise applying embedding_mask-s fails
+            target_eval_length = min(self.max_samples_per_log["eval"], self.dataset_length["eval"])
+            if target_eval_length % 2 != 0:
+                target_eval_length = 2 * (target_eval_length // 2)
+
             # cut only the selected number of batches from both iterators
-            fwd_iter = itertools.islice(fwd_iter, self.max_samples_per_log["eval"])
-            bwd_iter = itertools.islice(bwd_iter, self.max_samples_per_log["eval"])
+            fwd_iter = itertools.islice(fwd_iter, target_eval_length)
+            bwd_iter = itertools.islice(bwd_iter, target_eval_length)
 
         # interleave two iterators: samples of both should be compatible with the base model
         pad_token_t = torch.tensor(self.tokenizer.pad_token_id)
