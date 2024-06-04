@@ -188,7 +188,11 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         # do-eval condition should be consistent with underlying objectives
         self.val_texts, self.val_texts_path = objectives[0].val_texts, objectives[0].val_texts_path
         self.dataset_length = self.objectives[0].dataset_length  # both objectives' datasets have identical length
-        # TODO: check that self.compatible_head_model points to the base model
+
+        if self.dataset_length["eval"] < 2:
+            # this is not acceptable: we need at least pairs of samples for both training and evaluation
+            self.objectives[0].dataset_length["eval"] = 0
+            self.val_texts, self.val_texts_path = None, None
 
         self.semantic_over_lang_sim_margin = semantic_over_lang_sim_margin
         self.embeddings_pooling_strategy = embeddings_pooling_strategy
