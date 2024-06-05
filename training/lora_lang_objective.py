@@ -187,12 +187,13 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         # self.val_texts = []  # TODO: remove
         # do-eval condition should be consistent with underlying objectives
         self.val_texts, self.val_texts_path = objectives[0].val_texts, objectives[0].val_texts_path
-        self.dataset_length = self.objectives[0].dataset_length  # both objectives' datasets have identical length
+        # synchronize lengths, but avoid referencing the same object:
+        self.dataset_length = {k: v for k, v in self.objectives[0].dataset_length.items()}
 
-        # TODO: fix this better (at least using self.objectives[0].batch_size)
-        if self.dataset_length["eval"] * 2 < self.max_samples_per_log["eval"]:
+        # if self.dataset_length["eval"] / objectives[0].batch_size < self.max_samples_per_log["eval"]:
+        if self.dataset_length["eval"] < objectives[0].batch_size:
             # this is not acceptable: we need at least pairs of samples for both training and evaluation
-            self.objectives[0].dataset_length["eval"] = 0
+            self.dataset_length["eval"] = 0
             self.val_texts, self.val_texts_path = None, None
 
         self.semantic_over_lang_sim_margin = semantic_over_lang_sim_margin
@@ -205,11 +206,15 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
 
     def _get_inputs_iterator(self, split: str) -> Iterable[Union[BatchEncoding, Dict[str, torch.Tensor]]]:
         fwd_iter, bwd_iter = (o._get_inputs_iterator(split) for o in self.objectives)
+        # note that fwd_iter and bwd_iter are in batches
         if split == "eval":
             # we must guarantee that both in-language and cross-language samples are paired,
             # otherwise applying embedding_mask-s fails
-            target_eval_length = min(self.max_samples_per_log["eval"], self.dataset_length["eval"] * 2)
+            target_eval_length = min(self.max_samples_per_log["eval"],
+                                     self.dataset_length["eval"] / self.objectives[0].batch_size)
+            # note that self.max_samples_per_log["eval"] is in batches, self.dataset_length["eval"] in samples
             if target_eval_length % 2 != 0:
+                # round down to a number of batches divisible by two
                 target_eval_length = 2 * (target_eval_length // 2)
 
             # cut only the selected number of batches from both iterators
@@ -264,6 +269,10 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
                       model_outputs: Seq2SeqLMOutput,
                       labels: torch.LongTensor,
                       inputs: Optional[Union[BatchEncoding, Dict[str, torch.Tensor]]] = None) -> torch.Tensor:
+        if inputs["input_ids"].shape[0] != max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)):
+            logger.error("Inputs do not have a shape of their accessing mask. Inputs: %s, max index of mask: %s",
+                         inputs["input_ids"].shape,
+                         max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)))
         if self.embeddings_pooling_strategy == "mean":
             langs, other_langs = ("src", "tgt"), ("tgt", "src")
             hidden = dict(zip(langs, self._hidden_states_from_model_output(model_outputs)))

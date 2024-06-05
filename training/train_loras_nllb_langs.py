@@ -222,7 +222,7 @@ def init_objective(src_lang: str,
         "merge_objective_module": objective_module is None,
     }
 
-    if (args.baseline_training or is_eval_objective) and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
+    if args.baseline_training and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
     else:
         objective_peft_config = LoraConfig(
