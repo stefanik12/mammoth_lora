@@ -121,6 +121,7 @@ def init_objective(src_lang: str,
                    tgt_lang: str,
                    base_data_dir="data/example_data_dir",
                    is_eval_objective: bool = False,
+                   is_baseline_objective: bool = False,
                    inverse_lang_direction: bool = False,
                    peft_target_modules: Optional[List[str]] = None,
                    objective_module: Optional[torch.nn.Module] = None) -> Sequence2Sequence:
@@ -222,7 +223,7 @@ def init_objective(src_lang: str,
         "merge_objective_module": objective_module is None,
     }
 
-    if args.baseline_training and not (src_lang == "eng" and tgt_lang == "eng"):  # special case
+    if is_baseline_objective:
         objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
     else:
         objective_peft_config = LoraConfig(
@@ -243,7 +244,9 @@ target_modules = per_model_target_modules.get(model_type, None)
 if args.modularization == "per-enc-dec-lang":
     print("Loading model %s to get a list of its parameters" % lang_module.model_name_or_path)
     english_objective = init_objective("eng", "eng",
-                                       is_eval_objective=True, peft_target_modules=target_modules)
+                                       is_eval_objective=True,
+                                       is_baseline_objective=False,
+                                       peft_target_modules=target_modules)
     all_modules = [n for n, _ in english_objective.compatible_head_model.base_model.model.named_modules()]
 
 for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", total=len(target_langs)):
@@ -260,6 +263,7 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
         fwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
                                        peft_target_modules=peft_modules,
                                        is_eval_objective=args.eval_run,
+                                       is_baseline_objective=args.baseline_training,
                                        )
         if args.modularization == "per-enc-dec-lang":
             # replace initialized encoder with the english one
@@ -275,6 +279,7 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
         bwd_objective = init_objective("eng", tgt_lang, args.base_data_dir,
                                        peft_target_modules=peft_modules,
                                        is_eval_objective=args.eval_run,
+                                       is_baseline_objective=args.baseline_training,
                                        inverse_lang_direction=True,
                                        )
         if args.modularization == "per-enc-dec-lang":
@@ -306,10 +311,13 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
 
 if args.extra_eval_langs:
     # eval objectives are always parametrized by the base model -- we do not train with them
-    base_model = objectives[0].compatible_head_model.base_model.model
+    fwd_model = objectives[0].compatible_head_model
+    base_model = fwd_model.base_model.model if not args.baseline_training else fwd_model
 
     eval_objectives = [init_objective("eng", tgt_lang, args.base_data_dir,
-                                      is_eval_objective=True, objective_module=base_model)
+                                      is_eval_objective=True,
+                                      is_baseline_objective=True,
+                                      objective_module=base_model)
                        for tgt_lang in tqdm(args.extra_eval_langs.split(","), desc="Loading eval objectives...")]
 else:
     eval_objectives = []
