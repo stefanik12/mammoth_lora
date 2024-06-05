@@ -269,7 +269,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
                       model_outputs: Seq2SeqLMOutput,
                       labels: torch.LongTensor,
                       inputs: Optional[Union[BatchEncoding, Dict[str, torch.Tensor]]] = None) -> torch.Tensor:
-        if inputs["input_ids"].shape[0] != max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)):
+        if inputs["input_ids"].shape[0] != max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)) + 1:
             logger.error("Inputs do not have a shape of their accessing mask. Inputs: %s, max index of mask: %s",
                          inputs["input_ids"].shape,
                          max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)))
