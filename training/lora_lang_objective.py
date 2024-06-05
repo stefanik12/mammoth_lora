@@ -215,7 +215,9 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
             # note that self.max_samples_per_log["eval"] is in batches, self.dataset_length["eval"] in samples
             if target_eval_length % 2 != 0:
                 # round down to a number of batches divisible by two
-                target_eval_length = int(2 * (target_eval_length // 2))
+                target_eval_length = 2 * (target_eval_length // 2)
+
+            target_eval_length = int(target_eval_length)
 
             # cut only the selected number of batches from both iterators
             fwd_iter = itertools.islice(fwd_iter, target_eval_length)
