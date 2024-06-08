@@ -124,7 +124,8 @@ def init_objective(src_lang: str,
                    is_baseline_objective: bool = False,
                    inverse_lang_direction: bool = False,
                    peft_target_modules: Optional[List[str]] = None,
-                   objective_module: Optional[torch.nn.Module] = None) -> Sequence2Sequence:
+                   objective_module: Optional[torch.nn.Module] = None,
+                   save_baseline_obj_module: bool = True) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
     # TODO: we need to fix languages: now we iterate only through the "e"+ target langs
 
@@ -224,7 +225,9 @@ def init_objective(src_lang: str,
     }
 
     if is_baseline_objective:
-        objective = Sequence2SequenceBaseline(*shared_args, **shared_kwargs)
+        objective = Sequence2SequenceBaseline(*shared_args,
+                                              save_objective_module=save_baseline_obj_module,
+                                              **shared_kwargs)
     else:
         objective_peft_config = LoraConfig(
                 task_type=TaskType.SEQ_2_SEQ_LM, inference_mode=False, r=32, lora_alpha=32, lora_dropout=0.1,
@@ -249,11 +252,21 @@ if args.modularization == "per-enc-dec-lang":
                                        peft_target_modules=target_modules)
     all_modules = [n for n, _ in english_objective.compatible_head_model.base_model.model.named_modules()]
 
+
+fwd_objective = None
+
 for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", total=len(target_langs)):
+    # distributed loading of objectives
     # if i % int(os.environ.get("WORLD_SIZE", 1)) != int(os.environ.get("RANK", 0)):
     #     TODO: this will not work: we can not average gradients over different models! We need the same model
     #     continue
     peft_modules = target_modules
+
+    # support for continued baseline training: reload module from the first-loaded objective
+    if args.baseline_training and fwd_objective is not None:
+        preloaded_module = fwd_objective.compatible_head_model
+    else:
+        preloaded_module = None
 
     if args.translation_direction in ("from-eng", "both"):
         if args.modularization == "per-enc-dec-lang":
@@ -264,6 +277,8 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
                                        peft_target_modules=peft_modules,
                                        is_eval_objective=args.eval_run,
                                        is_baseline_objective=args.baseline_training,
+                                       objective_module=preloaded_module,
+                                       save_baseline_obj_module=preloaded_module is not None,
                                        )
         if args.modularization == "per-enc-dec-lang":
             # replace initialized encoder with the english one
@@ -281,6 +296,8 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
                                        is_eval_objective=args.eval_run,
                                        is_baseline_objective=args.baseline_training,
                                        inverse_lang_direction=True,
+                                       objective_module=preloaded_module,
+                                       save_baseline_obj_module=preloaded_module is not None,
                                        )
         if args.modularization == "per-enc-dec-lang":
             # replace initialized encoder with the english one
@@ -301,6 +318,7 @@ for i, tgt_lang in tqdm(enumerate(target_langs), desc="Loading objectives...", t
                                                     loss_weight=args.lang_margin_loss_weight,
                                                     # semantic_over_lang_sim_margin=45.24  # non-normalized default
                                                     semantic_over_lang_sim_margin=args.lang_margin,
+                                                    save_objective_module=False,
                                                     )
         # if fwd_objective.val_texts is not None or fwd_objective.val_texts_path is not None:
         #     # This fails because apparently we have languages with a single evaluation sample :)
@@ -338,13 +356,11 @@ if args.pair_evaluation_langs and not args.freeze_shared_params:
 
     objectives[0].evaluators["eval"] += pair_evaluators
 
-saving_strategy = SavingStrategy.FIRST_OBJECTIVE if args.baseline_training else SavingStrategy.ALL_OBJECTIVES
 accum_steps = (32 // int(os.environ.get("WORLD_SIZE", 1))) if not args.local_run else 3
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
                                          learning_rate=2e-5,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
-                                         saving_strategy=saving_strategy,
                                          stopping_patience=5,
                                          do_train=True,
                                          do_eval=True,
