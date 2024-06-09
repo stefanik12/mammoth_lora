@@ -135,10 +135,18 @@ def init_objective(src_lang: str,
     specific_src_lang = None
     specific_tgt_lang = None
     if args.use_language_prefixes:
+        prefix_src_lang = src_lang if not inverse_lang_direction else tgt_lang
         prefix_tgt_lang = tgt_lang if not inverse_lang_direction else src_lang
         if hasattr(lang_module.tokenizer, "lang_code_to_id"):
-            specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
-                                     if k.startswith(src_lang))
+            try:
+                specific_src_lang = next(k for k, v in lang_module.tokenizer.lang_code_to_id.items()
+                                         if k.startswith(prefix_src_lang))
+            except StopIteration as e:
+                if args.allow_unseen_langs:
+                    specific_src_lang = next(t_id for t, t_id in lang_module.tokenizer.vocab.items()
+                                             if prefix_src_lang == t)
+                else:
+                    raise e
             try:
                 specific_tgt_lang, tgt_token_id = next((k, v) for k, v in lang_module.tokenizer.lang_code_to_id.items()
                                                        if k.startswith(prefix_tgt_lang))
@@ -202,10 +210,10 @@ def init_objective(src_lang: str,
 
     obj_id = ("%s-%s" % (src_lang, tgt_lang)) if not inverse_lang_direction else ("%s-%s" % (tgt_lang, src_lang))
 
-    objective_src_lang = specific_src_lang if specific_src_lang is not None else src_lang
-    objective_tgt_lang = specific_tgt_lang if specific_tgt_lang is not None else tgt_lang
-    if inverse_lang_direction:
-        objective_src_lang, objective_tgt_lang = objective_tgt_lang, objective_src_lang
+    objective_src_lang = specific_src_lang if specific_src_lang is not None else (src_lang if not inverse_lang_direction else tgt_lang)
+    objective_tgt_lang = specific_tgt_lang if specific_tgt_lang is not None else (tgt_lang if not inverse_lang_direction else src_lang)
+    # if inverse_lang_direction:
+    #     objective_src_lang, objective_tgt_lang = objective_tgt_lang, objective_src_lang
 
     shared_kwargs = {
         "texts_or_path": src,
