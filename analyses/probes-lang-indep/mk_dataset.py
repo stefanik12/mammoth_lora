@@ -18,7 +18,7 @@ parser.add_argument('--languages', nargs='+')
 parser.add_argument('--device', type=torch.device, default=torch.device('cpu'))
 args = parser.parse_args()
 
-base_model_enc = transformers.AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint + "/base_model").model.encoder.to(args.device)
+base_model_enc = transformers.AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint).model.encoder.to(args.device)
 
 dataset = datasets.load_dataset("facebook/flores", 'all', split='dev', trust_remote_code=True)
 dataset = dataset.train_test_split(shuffle=True, seed=632, test_size=0.1)

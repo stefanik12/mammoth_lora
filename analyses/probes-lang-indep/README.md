@@ -5,7 +5,7 @@ step 1., create a dataset.
 E.g., this will pick sentence-level datapoints for three langs (French, English, Ukranian) and remove the language token:
 
 ```sh
-python3 mk_dataset.py  checkpoint-31000/ xx2en/ckpt-31000/fra-eng-ukr.sent --languages fra_Latn eng_Latn ukr_Cyrl --device cuda:0 --dropfirst --meanpool
+python3 mk_dataset.py  checkpoint-31000/base_model xx2en/ckpt-31000/fra-eng-ukr.sent --languages fra_Latn eng_Latn ukr_Cyrl --device cuda:0 --dropfirst --meanpool
 ```
 
 step 2., evaluate without probe:
