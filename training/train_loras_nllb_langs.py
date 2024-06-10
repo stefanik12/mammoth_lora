@@ -4,10 +4,15 @@ import os
 from typing import Optional, List
 
 import torch
+torch.manual_seed(4321)
+
+import random
+random.seed(4321)
+
 from adaptor.adapter import Adapter
 from adaptor.objectives.seq2seq import Sequence2Sequence
 from adaptor.schedules import ParallelSchedule
-from adaptor.utils import AdaptationArguments, StoppingStrategy, SavingStrategy
+from adaptor.utils import AdaptationArguments, StoppingStrategy
 from datasets import load_dataset
 from peft import LoraConfig, TaskType
 from tqdm import tqdm
