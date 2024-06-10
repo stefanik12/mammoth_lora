@@ -61,6 +61,8 @@ parser.add_argument("--use_language_prefixes", help="Whether to prefix expected 
 parser.add_argument("--lang_margin_loss_weight", help="Whether to also train in the inverse language translation."
                                                       "Needed for enforcing language independence regularization.",
                     default=0., type=float)
+parser.add_argument("--learning_rate", help="Learning rate used with all objectives. Defaults to `2e-5`.",
+                    default=2e-5, type=float)
 parser.add_argument("--lang_margin", help="Expected margin between the distance of equivalent texts "
                                           "in different langs and non-equivalent texts in the same language. Used only "
                                           "for lang independence regularization, i.e. when lang_margin_loss_weight!=0",
@@ -372,7 +374,7 @@ if args.pair_evaluation_langs and not args.freeze_shared_params:
 accum_steps = (32 // int(os.environ.get("WORLD_SIZE", 1))) if not args.local_run else 3
 
 training_arguments = AdaptationArguments(output_dir=checkpoint_dir,
-                                         learning_rate=2e-5,
+                                         learning_rate=args.learning_rate,
                                          stopping_strategy=StoppingStrategy.ALL_OBJECTIVES_CONVERGED,
                                          stopping_patience=5,
                                          do_train=True,
