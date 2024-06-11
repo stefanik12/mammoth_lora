@@ -259,8 +259,8 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
         if self.compatible_head_model.config.is_encoder_decoder:
             encoder_hidden: torch.FloatTensor = torch.stack(model_outputs.encoder_hidden_states, dim=2)
             decoder_hidden: torch.FloatTensor = torch.stack(model_outputs.decoder_hidden_states, dim=2)
-            assert encoder_hidden is not None and decoder_hidden is not None, \
-                "Trained model does not seem to return hidden states."
+            assert (model_outputs.encoder_hidden_states is not None and model_outputs.decoder_hidden_states is not None,
+                    "Trained model does not seem to return hidden states.")
             all_hidden = torch.hstack([encoder_hidden, decoder_hidden])
             all_hidden = torch.nn.functional.normalize(all_hidden)
             return all_hidden[self.src_embeddings_mask], all_hidden[self.tgt_embeddings_mask]
@@ -275,6 +275,7 @@ class LangIndependenceRegularizer(UnsupervisedObjective, Sequence2SequenceMixin)
             logger.error("Inputs do not have a shape of their accessing mask. Inputs: %s, max index of mask: %s",
                          inputs["input_ids"].shape,
                          max(max(self.src_embeddings_mask), max(self.tgt_embeddings_mask)))
+            logger.error("Input_ids values: %s", inputs["input_ids"].tolist())
         if self.embeddings_pooling_strategy == "mean":
             langs, other_langs = ("src", "tgt"), ("tgt", "src")
             hidden = dict(zip(langs, self._hidden_states_from_model_output(model_outputs)))
