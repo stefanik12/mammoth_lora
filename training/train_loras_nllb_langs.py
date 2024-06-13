@@ -4,6 +4,8 @@ import os
 from typing import Optional, List
 
 import torch
+import wandb
+
 torch.manual_seed(4321)
 
 import random
@@ -97,12 +99,12 @@ else:
     checkpoint_dir = os.path.join(args.checkpoint_dir, ("checkpoints" if not args.baseline_training
                                                         else "checkpoints-baseline"))
     if not args.local_run and os.environ.get("LOCAL_RANK", 0) == 0:
-        import wandb
-
-        wandb.init(project="mammoth-lora")
         checkpoint_dir = checkpoint_dir + "-" + wandb.run.name
 
 print("Checkpoint will be saved to '{}'".format(checkpoint_dir))
+
+wandb.init(project="mammoth-lora")
+wandb.log({"slurm_id": os.environ.get("SLURM_JOB_ID", -1)}, commit=False)
 
 lang_module = OutputReturningLangModule(args.base_model)
 
@@ -134,7 +136,7 @@ def init_objective(src_lang: str,
                    objective_module: Optional[torch.nn.Module] = None,
                    save_baseline_obj_module: bool = True) -> Sequence2Sequence:
     lang_dir = os.path.join(base_data_dir, "%s-%s" % (src_lang, tgt_lang))
-    # TODO: we need to fix languages: now we iterate only through the "e"+ target langs
+    # TODO: we need to extend languages: now we iterate only through the "e"+ target langs
 
     # evaluation
     model_spec_generation_kwargs = {}
