@@ -50,6 +50,7 @@ parser.add_argument("--samples_per_lang", help="Number of batches to sample in t
                                                " means sample training batch from all languages", default=1, type=int)
 parser.add_argument("--eval_batches", default=20, type=int)
 parser.add_argument("--eval_steps", default=500, type=int)
+parser.add_argument("--batch_size", default=2, type=int)
 parser.add_argument("--eval_on_flores", default="True", type=str)
 parser.add_argument("--save_steps", default=500, type=int)
 parser.add_argument("--resume_from_checkpoint", help="Whether this is a continued training."
@@ -231,7 +232,7 @@ def init_objective(src_lang: str,
         "val_labels_or_path": val_tgt,
         "source_lang_id": objective_src_lang,
         "target_lang_id": objective_tgt_lang,
-        "batch_size": 2,
+        "batch_size": args.batch_size,
         "val_evaluators": evaluators,
         "objective_id": obj_id,
         "source_texts_prefix_fn": source_texts_prefix_fn,
