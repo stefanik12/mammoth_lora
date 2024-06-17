@@ -93,6 +93,9 @@ args.eval_on_flores = args.eval_on_flores.lower() != "false"
 print("Running with arguments: %s" % args)
 print("Training World size: %s" % int(os.environ.get("WORLD_SIZE", 1)))
 
+wandb.init(project="mammoth-lora")
+wandb.log({"slurm_id": os.environ.get("SLURM_JOB_ID", -1)}, commit=False)
+
 if args.resume_from_checkpoint:
     # remove the checkpoint-X part of path
     checkpoint_dir = args.base_model.split("/checkpoint-")[0]
@@ -103,9 +106,6 @@ else:
         checkpoint_dir = checkpoint_dir + "-" + wandb.run.name
 
 print("Checkpoint will be saved to '{}'".format(checkpoint_dir))
-
-wandb.init(project="mammoth-lora")
-wandb.log({"slurm_id": os.environ.get("SLURM_JOB_ID", -1)}, commit=False)
 
 lang_module = OutputReturningLangModule(args.base_model)
 
