@@ -27,17 +27,14 @@ dataset = dataset.train_test_split(shuffle=True, seed=632, test_size=0.1)
 def get_embeddings(examples):
     return_dict = {'lang': [], 'emb': []}
     for language in args.languages:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            args.checkpoint + "/base_model", 
-            src_lang=language,
-        )
-        for idx in range(len(examples[f"sentence_{language}"])):            
+        tokenizer = transformers.AutoTokenizer.from_pretrained(args.checkpoint, src_lang=language)
+        for idx in range(len(examples[f"sentence_{language}"])):
             inputs = tokenizer(examples[f"sentence_{language}"][idx], return_tensors='pt')
+            outputs = base_model_enc(**inputs.to(args.device), output_hidden_states=True)
+            encoder_embeddings = torch.stack(outputs.hidden_states, dim=-1).flatten(2)
+            embeddings = encoder_embeddings.squeeze(0)
             if args.dropfirst:
-                for key in inputs.keys():
-                    inputs[key] = inputs[key][:,1:,...]
-            outputs = base_model_enc(**inputs.to(args.device))
-            embeddings = outputs.last_hidden_state.squeeze(0)
+                embeddings = embeddings[1:, ...]
             if args.meanpooled:
                 emb = embeddings.mean(0)
                 return_dict['emb'].append(emb.cpu())
